@@ -287,6 +287,30 @@ namespace AiUsageWidget.Providers
             _cached = null;
         }
 
+        public static bool IsRunning()
+        {
+            try
+            {
+                var path = Path.Combine(
+                    ProviderUtil.Home, ".local", "state", "opencode", "service.json");
+                var text = ProviderUtil.ReadText(path);
+                if (text == null) return false;
+
+                var info = Json.ParseObject(text);
+                var pid = (int)Json.Long(Json.Get(info, "pid"));
+                if (pid <= 0) return false;
+
+                using (var process = System.Diagnostics.Process.GetProcessById(pid))
+                {
+                    return !process.HasExited;
+                }
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
         public static string TryGetGoKey()
         {
             if (_cached != null && (DateTime.UtcNow - _cachedAt).TotalMinutes < 10) return _cached;

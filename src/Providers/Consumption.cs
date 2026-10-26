@@ -60,6 +60,10 @@ namespace AiUsageWidget.Providers
 
         private static List<Consumption> FetchOpenCode()
         {
+            // Never let the widget start the OpenCode background service just to
+            // read numbers: only read when it is already running.
+            if (!OpenCodeService.IsRunning()) return new List<Consumption>();
+
             var executable = ResolveOpenCode();
             if (executable == null) return new List<Consumption>();
 
