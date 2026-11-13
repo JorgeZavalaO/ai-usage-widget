@@ -3,6 +3,8 @@ $script:RequiredAssemblies = @(
     'PresentationCore.dll',
     'WindowsBase.dll',
     'System.Xaml.dll',
+    'UIAutomationProvider.dll',
+    'UIAutomationTypes.dll',
     'System.dll',
     'System.Core.dll',
     'System.Xml.dll',

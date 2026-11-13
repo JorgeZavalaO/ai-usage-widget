@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Windows;
 using System.Windows.Automation;
+using System.Windows.Automation.Peers;
+using System.Windows.Automation.Provider;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -20,6 +22,127 @@ namespace AiUsageWidget.UI
             public bool IsCycle;
         }
 
+        /// <summary>
+        /// Border used for the title-bar buttons. Border has no automation peer
+        /// by default, so this subclass supplies one and exposes Invoke/Toggle.
+        /// </summary>
+        private sealed class GlyphButtonHost : Border
+        {
+            public Action InvokeAction;
+            public Func<bool> ToggleStateProvider;
+            public Action ToggleAction;
+
+            protected override AutomationPeer OnCreateAutomationPeer()
+            {
+                return new GlyphButtonPeer(this);
+            }
+
+            public void RaiseToggleState(bool value)
+            {
+                var peer = UIElementAutomationPeer.FromElement(this) as GlyphButtonPeer;
+                if (peer == null) return;
+
+                var state = value
+                    ? System.Windows.Automation.ToggleState.On
+                    : System.Windows.Automation.ToggleState.Off;
+                var previous = value
+                    ? System.Windows.Automation.ToggleState.Off
+                    : System.Windows.Automation.ToggleState.On;
+                peer.RaisePropertyChangedEvent(
+                    TogglePatternIdentifiers.ToggleStateProperty, previous, state);
+            }
+        }
+
+        private sealed class GlyphButtonPeer : FrameworkElementAutomationPeer, IInvokeProvider, IToggleProvider
+        {
+            public GlyphButtonPeer(GlyphButtonHost owner)
+                : base(owner)
+            {
+            }
+
+            private GlyphButtonHost Host
+            {
+                get { return (GlyphButtonHost)Owner; }
+            }
+
+            protected override AutomationControlType GetAutomationControlTypeCore()
+            {
+                return AutomationControlType.Button;
+            }
+
+            protected override string GetClassNameCore()
+            {
+                return "GlyphButton";
+            }
+
+            public override object GetPattern(PatternInterface patternInterface)
+            {
+                if (patternInterface == PatternInterface.Toggle && Host.ToggleAction != null)
+                {
+                    return this;
+                }
+                if (patternInterface == PatternInterface.Invoke && Host.InvokeAction != null)
+                {
+                    return this;
+                }
+                return base.GetPattern(patternInterface);
+            }
+
+            void IInvokeProvider.Invoke()
+            {
+                if (!IsEnabled()) throw new ElementNotEnabledException();
+                Host.InvokeAction();
+            }
+
+            System.Windows.Automation.ToggleState IToggleProvider.ToggleState
+            {
+                get
+                {
+                    return Host.ToggleStateProvider != null && Host.ToggleStateProvider()
+                        ? System.Windows.Automation.ToggleState.On
+                        : System.Windows.Automation.ToggleState.Off;
+                }
+            }
+
+            void IToggleProvider.Toggle()
+            {
+                if (!IsEnabled()) throw new ElementNotEnabledException();
+                Host.ToggleAction();
+            }
+        }
+
+        private sealed class ChromeButton
+        {
+            public GlyphButtonHost Host;
+            public TextBlock Glyph;
+            public Func<bool> IsActive;
+            public bool Hovering;
+
+            public void Render()
+            {
+                var active = IsActive != null && IsActive();
+                Glyph.Foreground = (Hovering || active) ? TextBrush : MutedBrush;
+
+                if (active)
+                {
+                    Host.Background = Hovering ? PinHoverBg : PinBg;
+                }
+                else
+                {
+                    Host.Background = Hovering ? HoverBg : Brushes.Transparent;
+                }
+            }
+        }
+
+        /// <summary>Icon glyph: visual only, never a node in the automation tree.</summary>
+        private sealed class GlyphText : TextBlock
+        {
+            protected override AutomationPeer OnCreateAutomationPeer()
+            {
+                return null;
+            }
+        }
+
         // ---- palette -------------------------------------------------------
         private static readonly SolidColorBrush CardBg = Frozen(0x0A, 0xFF, 0xFF, 0xFF);
         private static readonly SolidColorBrush ChromeBg = Frozen(0xD6, 0x11, 0x13, 0x18);
@@ -28,6 +151,9 @@ namespace AiUsageWidget.UI
         private static readonly SolidColorBrush MutedBrush = Frozen(0x8A, 0x91, 0x9E);
         private static readonly SolidColorBrush FaintBrush = Frozen(0x5A, 0x62, 0x70);
         private static readonly SolidColorBrush TrackBrush = Frozen(0x14, 0xFF, 0xFF, 0xFF);
+        private static readonly SolidColorBrush HoverBg = Frozen(0x12, 0xFF, 0xFF, 0xFF);
+        private static readonly SolidColorBrush PinBg = Frozen(0x20, 0xFF, 0xFF, 0xFF);
+        private static readonly SolidColorBrush PinHoverBg = Frozen(0x2E, 0xFF, 0xFF, 0xFF);
         private static readonly SolidColorBrush OkBrush = Frozen(0x3F, 0xB9, 0x50);
         private static readonly SolidColorBrush WarnBrush = Frozen(0xD2, 0x99, 0x22);
         private static readonly SolidColorBrush CritBrush = Frozen(0xF8, 0x51, 0x49);
@@ -44,7 +170,8 @@ namespace AiUsageWidget.UI
             Margin = new Thickness(14, 0, 14, 8)
         };
         private readonly TextBlock _footerText = new TextBlock();
-        private readonly TextBlock _collapseGlyph = new TextBlock();
+        private readonly TextBlock _collapseGlyph = new GlyphText();
+        private ChromeButton _pinButton;
         private readonly List<Countdown> _countdowns = new List<Countdown>();
         private readonly DispatcherTimer _tick;
         private readonly DispatcherTimer _savePosition;
@@ -70,6 +197,7 @@ namespace AiUsageWidget.UI
             TextOptions.SetTextFormattingMode(this, TextFormattingMode.Display);
 
             Content = BuildChrome();
+            ApplyTopmost(state.Config.AlwaysOnTop);
             ApplyPosition();
 
             _tick = new DispatcherTimer { Interval = TimeSpan.FromSeconds(20) };
@@ -148,7 +276,8 @@ namespace AiUsageWidget.UI
 
             var settings = GlyphButton("\uE713", "Settings", OpenSettings);
             var refresh = GlyphButton("\uE72C", "Refresh", () => _state.RefreshNow());
-            var pin = GlyphButton("\uE718", "Always on top", TogglePin);
+            _pinButton = GlyphButton(
+                "\uE718", "Always on top", TogglePin, () => _state.Config.AlwaysOnTop);
             var collapse = GlyphButton("\uE70E", "Collapse", () => SetCollapsed(!IsCollapsed(), true));
             var close = GlyphButton("\uE711", "Hide to tray", Hide);
 
@@ -158,18 +287,19 @@ namespace AiUsageWidget.UI
             _collapseGlyph.Foreground = MutedBrush;
             _collapseGlyph.TextAlignment = TextAlignment.Center;
             _collapseGlyph.VerticalAlignment = VerticalAlignment.Center;
-            collapse.Child = _collapseGlyph;
+            collapse.Host.Child = _collapseGlyph;
+            collapse.Glyph = _collapseGlyph;
 
-            Grid.SetColumn(settings, 2);
-            Grid.SetColumn(refresh, 3);
-            Grid.SetColumn(pin, 4);
-            Grid.SetColumn(collapse, 5);
-            Grid.SetColumn(close, 6);
-            header.Children.Add(settings);
-            header.Children.Add(refresh);
-            header.Children.Add(pin);
-            header.Children.Add(collapse);
-            header.Children.Add(close);
+            Grid.SetColumn(settings.Host, 2);
+            Grid.SetColumn(refresh.Host, 3);
+            Grid.SetColumn(_pinButton.Host, 4);
+            Grid.SetColumn(collapse.Host, 5);
+            Grid.SetColumn(close.Host, 6);
+            header.Children.Add(settings.Host);
+            header.Children.Add(refresh.Host);
+            header.Children.Add(_pinButton.Host);
+            header.Children.Add(collapse.Host);
+            header.Children.Add(close.Host);
 
             header.MouseLeftButtonDown += (s, e) =>
             {
@@ -195,37 +325,58 @@ namespace AiUsageWidget.UI
             return outer;
         }
 
-        private static Border GlyphButton(string glyph, string tooltip, Action onClick)
+        private static ChromeButton GlyphButton(
+            string glyph, string name, Action onClick, Func<bool> isActive = null)
         {
-            var text = new TextBlock
+            var text = new GlyphText
             {
                 Text = glyph,
                 FontFamily = IconFont,
                 FontSize = 11,
-                Foreground = MutedBrush,
                 TextAlignment = TextAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center
             };
 
-            var host = new Border
+            var host = new GlyphButtonHost
             {
                 Width = 26,
                 Height = 26,
                 Margin = new Thickness(0, 0, 2, 0),
                 Background = Brushes.Transparent,
                 Child = text,
-                ToolTip = tooltip,
+                ToolTip = name,
                 Cursor = Cursors.Hand,
                 VerticalAlignment = VerticalAlignment.Center,
                 Focusable = true,
-                BorderThickness = new Thickness(0)
+                BorderThickness = new Thickness(0),
+                CornerRadius = new CornerRadius(5)
             };
 
-            AutomationProperties.SetName(host, tooltip);
+            var button = new ChromeButton { Host = host, Glyph = text, IsActive = isActive };
+
+            if (isActive == null)
+            {
+                host.InvokeAction = onClick;
+            }
+            else
+            {
+                host.ToggleAction = onClick;
+                host.ToggleStateProvider = isActive;
+            }
+
+            AutomationProperties.SetName(host, name);
             KeyboardNavigation.SetIsTabStop(host, true);
 
-            host.MouseEnter += (s, e) => text.Foreground = TextBrush;
-            host.MouseLeave += (s, e) => text.Foreground = MutedBrush;
+            host.MouseEnter += (s, e) =>
+            {
+                button.Hovering = true;
+                button.Render();
+            };
+            host.MouseLeave += (s, e) =>
+            {
+                button.Hovering = false;
+                button.Render();
+            };
             host.MouseLeftButtonDown += (s, e) => { e.Handled = true; };
             host.MouseLeftButtonUp += (s, e) =>
             {
@@ -251,7 +402,8 @@ namespace AiUsageWidget.UI
                 }
             };
 
-            return host;
+            button.Render();
+            return button;
         }
 
         // ---- render --------------------------------------------------------
@@ -662,10 +814,13 @@ namespace AiUsageWidget.UI
 
         private void TogglePin()
         {
-            var value = !Topmost;
-            _state.Config.AlwaysOnTop = value;
+            _state.Config.AlwaysOnTop = !_state.Config.AlwaysOnTop;
             var saved = _state.Store.Save();
-            Topmost = _state.Config.AlwaysOnTop;
+
+            // Save() rolls the in-memory config back on failure, so reading it
+            // again after the call keeps the window and the pin state honest.
+            ApplyTopmost(_state.Config.AlwaysOnTop);
+
             if (!saved.Success)
             {
                 ShowSaveError("Always on top was not changed.", saved.ErrorCode);
@@ -674,7 +829,18 @@ namespace AiUsageWidget.UI
 
         public void SetTopmost(bool value)
         {
+            ApplyTopmost(value);
+        }
+
+        private void ApplyTopmost(bool value)
+        {
             Topmost = value;
+
+            if (_pinButton == null) return;
+
+            _pinButton.Host.ToolTip = value ? "Always on top: on" : "Always on top: off";
+            _pinButton.Render();
+            _pinButton.Host.RaiseToggleState(value);
         }
 
         private bool IsCollapsed()
