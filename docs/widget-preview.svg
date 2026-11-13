@@ -1,0 +1,139 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="440" viewBox="0 0 800 440" role="img" aria-label="AI Usage Widget preview">
+  <defs>
+    <linearGradient id="desktop" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0d1118"/>
+      <stop offset="0.55" stop-color="#151b26"/>
+      <stop offset="1" stop-color="#0a0d13"/>
+    </linearGradient>
+    <linearGradient id="chrome" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1b1f27"/>
+      <stop offset="1" stop-color="#111419"/>
+    </linearGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#20242c"/>
+      <stop offset="1" stop-color="#171b22"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#000000" flood-opacity="0.55"/>
+    </filter>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="26"/>
+    </filter>
+    <style>
+      .ui { font-family: "Segoe UI", "Segoe UI Variable Text", system-ui, sans-serif; }
+      .name { font-size: 12px; font-weight: 600; fill: #e6e8ec; }
+      .muted { font-size: 9.5px; fill: #8a919e; }
+      .faint { font-size: 9.5px; fill: #5a6270; }
+      .label { font-size: 10px; fill: #8a919e; }
+      .pct { font-size: 10px; fill: #e6e8ec; text-anchor: end; }
+      .reset { font-size: 9.5px; fill: #8a919e; text-anchor: end; }
+      .badge { font-size: 9px; fill: #8a919e; }
+      .track { fill: #2a2f36; }
+      .ok { fill: #3fb950; }
+      .warn { fill: #d29922; }
+      .crit { fill: #f85149; }
+      .icon { stroke: #8a919e; stroke-width: 1.3; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+    </style>
+  </defs>
+
+  <rect width="800" height="440" fill="url(#desktop)"/>
+  <circle cx="120" cy="90" r="110" fill="#2a6df4" opacity="0.16" filter="url(#glow)"/>
+  <circle cx="690" cy="360" r="130" fill="#3fb950" opacity="0.10" filter="url(#glow)"/>
+  <circle cx="710" cy="60" r="80" fill="#d29922" opacity="0.08" filter="url(#glow)"/>
+
+  <g filter="url(#shadow)">
+    <rect x="210" y="20" width="380" height="400" rx="14" fill="url(#chrome)" stroke="#2b303a"/>
+  </g>
+
+  <!-- title bar -->
+  <text x="224" y="44" class="ui name" font-size="12.5">AI Usage</text>
+  <g class="icon" transform="translate(466 30)">
+    <circle cx="6" cy="6" r="4.2"/><path d="M6 1.8v1M6 9.2v1M1.8 6h1M9.2 6h1M3 3l.8.8M8.2 8.2l.8.8M9 3l-.8.8M3.8 8.2L3 9"/>
+  </g>
+  <g class="icon" transform="translate(494 30)">
+    <path d="M10.5 6a4.5 4.5 0 1 1-1.6-3.4"/><path d="M9.5 1.2v2.2H7.3"/>
+  </g>
+  <g class="icon" transform="translate(522 30)">
+    <path d="M3 8.5V4.2a3 3 0 0 1 6 0v4.3"/><path d="M2 8.5h8"/><path d="M6 1v1.2"/>
+  </g>
+  <g class="icon" transform="translate(550 30)">
+    <path d="M2 8.5 6 4.5l4 4"/>
+  </g>
+  <g class="icon" transform="translate(578 30)">
+    <path d="M2 2l8 8M10 2l-8 8"/>
+  </g>
+
+  <!-- OpenCode Go -->
+  <rect x="222" y="64" width="356" height="108" rx="8" fill="url(#card)"/>
+  <text x="234" y="86" class="ui name">OpenCode Go</text>
+  <rect x="528" y="74" width="36" height="16" rx="4" fill="#ffffff" opacity="0.08"/>
+  <text x="538" y="85.4" class="ui badge">Go</text>
+
+  <text x="234" y="108" class="ui label">5h</text>
+  <rect x="270" y="102" width="220" height="6" rx="3" class="track"/>
+  <rect x="270" y="102" width="92.4" height="6" rx="3" class="ok"/>
+  <text x="512" y="108" class="ui pct">42%</text>
+  <text x="568" y="108" class="ui reset">2h 12m</text>
+
+  <text x="234" y="128" class="ui label">Week</text>
+  <rect x="270" y="122" width="220" height="6" rx="3" class="track"/>
+  <rect x="270" y="122" width="39.6" height="6" rx="3" class="ok"/>
+  <text x="512" y="128" class="ui pct">18%</text>
+  <text x="568" y="128" class="ui reset">3d 4h</text>
+
+  <text x="234" y="148" class="ui label">Month</text>
+  <rect x="270" y="142" width="220" height="6" rx="3" class="track"/>
+  <rect x="270" y="142" width="28.6" height="6" rx="3" class="ok"/>
+  <text x="512" y="148" class="ui pct">13%</text>
+  <text x="568" y="148" class="ui reset">27 Nov</text>
+
+  <text x="234" y="165" class="ui faint">today 1.2M tok · 7d 8.4M tok · 30d 31.2M tok</text>
+
+  <!-- Codex -->
+  <rect x="222" y="180" width="356" height="90" rx="8" fill="url(#card)"/>
+  <text x="234" y="202" class="ui name">ChatGPT / Codex</text>
+  <rect x="526" y="190" width="38" height="16" rx="4" fill="#ffffff" opacity="0.08"/>
+  <text x="535" y="201.4" class="ui badge">Plus</text>
+
+  <text x="234" y="224" class="ui label">5h</text>
+  <rect x="270" y="218" width="220" height="6" rx="3" class="track"/>
+  <rect x="270" y="218" width="140.8" height="6" rx="3" class="warn"/>
+  <text x="512" y="224" class="ui pct">64%</text>
+  <text x="568" y="224" class="ui reset">1h 48m</text>
+
+  <text x="234" y="244" class="ui label">Week</text>
+  <rect x="270" y="238" width="220" height="6" rx="3" class="track"/>
+  <rect x="270" y="238" width="48.4" height="6" rx="3" class="ok"/>
+  <text x="512" y="244" class="ui pct">22%</text>
+  <text x="568" y="244" class="ui reset">5d 2h</text>
+
+  <text x="234" y="261" class="ui faint">today 184k tok · 7d 1.1M tok · 30d 4.8M tok</text>
+
+  <!-- Claude -->
+  <rect x="222" y="278" width="356" height="102" rx="8" fill="url(#card)"/>
+  <text x="234" y="300" class="ui name">Claude</text>
+  <rect x="528" y="288" width="36" height="16" rx="4" fill="#ffffff" opacity="0.08"/>
+  <text x="538" y="299.4" class="ui badge">Pro</text>
+
+  <text x="234" y="322" class="ui label">5h</text>
+  <rect x="270" y="316" width="220" height="6" rx="3" class="track"/>
+  <rect x="270" y="316" width="178.2" height="6" rx="3" class="crit"/>
+  <text x="512" y="322" class="ui pct">81%</text>
+  <text x="568" y="322" class="ui reset">48m</text>
+
+  <text x="234" y="342" class="ui label">Week</text>
+  <rect x="270" y="336" width="220" height="6" rx="3" class="track"/>
+  <rect x="270" y="336" width="77" height="6" rx="3" class="ok"/>
+  <text x="512" y="342" class="ui pct">35%</text>
+  <text x="568" y="342" class="ui reset">4d 6h</text>
+
+  <text x="234" y="362" class="ui label">Week · Opus</text>
+  <rect x="280" y="356" width="210" height="6" rx="3" class="track"/>
+  <rect x="280" y="356" width="25.2" height="6" rx="3" class="ok"/>
+  <text x="512" y="362" class="ui pct">12%</text>
+  <text x="568" y="362" class="ui reset">4d 6h</text>
+
+  <text x="234" y="378" class="ui faint">today 96k tok · 7d 640k tok · 30d 2.9M tok</text>
+
+  <text x="224" y="404" class="ui faint">Updated 14:32 · every 5 min</text>
+</svg>
