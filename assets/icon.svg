@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="AI Usage Widget">
+  <title>AI Usage Widget</title>
+  <desc>A dark rounded card holding three usage bars, coloured by severity.</desc>
+
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1A1F27"/>
+      <stop offset="1" stop-color="#101318"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.05"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <clipPath id="tileClip">
+      <rect x="12" y="12" width="232" height="232" rx="54"/>
+    </clipPath>
+  </defs>
+
+  <!-- card -->
+  <rect x="12" y="12" width="232" height="232" rx="54" fill="url(#tile)"/>
+  <g clip-path="url(#tileClip)">
+    <rect x="12" y="12" width="232" height="232" fill="url(#sheen)"/>
+  </g>
+  <rect x="13" y="13" width="230" height="230" rx="53" fill="none" stroke="#FFFFFF" stroke-opacity="0.10" stroke-width="2"/>
+
+  <!-- window tracks -->
+  <g fill="#FFFFFF" fill-opacity="0.075">
+    <rect x="56" y="85" width="144" height="16" rx="8"/>
+    <rect x="56" y="120" width="144" height="16" rx="8"/>
+    <rect x="56" y="155" width="144" height="16" rx="8"/>
+  </g>
+
+  <!-- window fills: ok / warn / critical -->
+  <g>
+    <rect x="56" y="85" width="63" height="16" rx="8" fill="#3FB950"/>
+    <rect x="56" y="120" width="101" height="16" rx="8" fill="#D29922"/>
+    <rect x="56" y="155" width="130" height="16" rx="8" fill="#F85149"/>
+  </g>
+</svg>
