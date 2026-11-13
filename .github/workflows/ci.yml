@@ -1,0 +1,46 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Build
+        shell: pwsh
+        run: ./build.ps1
+
+      - name: Offline tests
+        shell: pwsh
+        run: ./test/run.ps1
+
+      - name: Verify failing assertions fail the runner
+        shell: pwsh
+        run: |
+          & ./test/run.ps1 -SelfTest
+          if ($LASTEXITCODE -ne 1) { throw "The self-test did not exit with code 1." }
+          exit 0
+
+      - name: Build and test from a path with spaces and non-ASCII characters
+        shell: pwsh
+        run: |
+          $target = Join-Path $env:RUNNER_TEMP 'tést repo with space'
+          New-Item -ItemType Directory -Force -Path $target | Out-Null
+          Get-ChildItem -Force | Where-Object { $_.Name -notin @('.git', 'dist') } |
+            Copy-Item -Destination $target -Recurse -Force
+          Push-Location $target
+          try {
+            ./build.ps1
+            ./test/run.ps1
+          }
+          finally {
+            Pop-Location
+          }
