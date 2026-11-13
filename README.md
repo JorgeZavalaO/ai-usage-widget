@@ -14,6 +14,7 @@
   <img alt=".NET Framework 4.8" src="https://img.shields.io/badge/.NET%20Framework-4.8-512BD4">
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-2ea44f">
   <img alt="Tests: 113 offline" src="https://img.shields.io/badge/tests-113%20offline-2ea44f">
+  <a href="https://github.com/JorgeZavalaO/ai-usage-widget/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/JorgeZavalaO/ai-usage-widget/actions/workflows/ci.yml/badge.svg"></a>
 </p>
 
 <p align="center">
@@ -234,7 +235,7 @@ wait, and reader joins complete.
 
 The 1.0 implementation and its automated gate are complete. The project is public
 as open source; treat the current build as a preview until the remaining manual
-evidence is recorded.
+evidence is recorded. The offline suite and Windows CI workflow pass.
 
 Still open:
 
@@ -242,7 +243,7 @@ Still open:
 - Mixed-DPI/multi-monitor, monitor removal, suspend/resume, hidden-start, and tray
   interaction matrix.
 - A 24-hour soak and a current resource baseline.
-- First execution of the GitHub Actions workflow on the public repository.
+- No tagged release artifact is published yet.
 - Code signing and SmartScreen reputation.
 
 Other limits:

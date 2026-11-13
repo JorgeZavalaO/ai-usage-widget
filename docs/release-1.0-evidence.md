@@ -230,7 +230,8 @@ Files: `src/Http.cs`, `src/Providers/Quota.cs`, `test/HttpTests.cs`.
 
 ### W09 - reproducible build and CI
 
-Status: locally verified; CI authored but not yet executed on GitHub.
+Status: locally verified and executed successfully on GitHub Actions (run
+`43477301767`).
 
 Files: `build.ps1`, `tools/toolchain.ps1`, `test/run.ps1`,
 `.github/workflows/ci.yml`, `README.md`.
@@ -271,7 +272,7 @@ Generated package:
 
 ```text
 dist\release\AIUsageWidget-1.0.0-win-x64.zip
-SHA-256 5a1f423599b6ad54e469c7457889b300b04dddf98a3f59ae30afb85c763bdc27
+SHA-256 836cd3120f3531a2c2bad52a5389e2ac3907a959926dac37bfc6907b6ac571b2
 ```
 
 Regenerate the package after any source change; the hash above is the final build
@@ -322,21 +323,21 @@ figures are explicitly qualified as historical.
 
 ## Open blockers and approvals
 
-1. **License/public distribution**: no license chosen; do not publish or tag until
-   the maintainer decides ownership terms.
-2. **Live provider checks**: Claude/Codex/OpenCode live responses and auth recovery
+1. **Live provider checks**: Claude/Codex/OpenCode live responses and auth recovery
    need an authorized supervised session. Fixtures are not a compatibility proof.
-3. **Manual desktop matrix**: mixed DPI, monitor removal, suspend/resume, hidden
+2. **Manual desktop matrix**: mixed DPI, monitor removal, suspend/resume, hidden
    startup, tray interactions, and second-instance show behavior remain.
-4. **Soak/resources**: 24-hour soak and resource baseline remain.
-5. **CI first run**: the workflow is authored and pinned but has not executed in
-   GitHub Actions.
-6. **Targeting pack**: this machine lacks the 4.8 reference-assembly pack; verify a
-   clean 4.8 Developer Pack environment in CI or a second machine.
-7. **Signing/distribution**: the package is unsigned; SmartScreen behavior is
+3. **Soak/resources**: 24-hour soak and resource baseline remain.
+4. **Targeting pack**: this machine lacks the 4.8 reference-assembly pack; verify a
+   clean 4.8 Developer Pack environment on a second machine. CI has completed a
+   clean Windows build and test run.
+5. **Signing/distribution**: the package is unsigned; SmartScreen behavior is
    documented but not bypassed.
-8. **Icon/tools assets**: `assets/` and `tools/make-icon.ps1` remain untracked and
-   must be included in the release commit.
+6. **Release artifact**: the repository is public under MIT, but no tagged portable
+   release has been published yet.
+
+Resolved in this publication step: MIT license, public repository, tracked icon and
+tooling assets.
 
 ## Rollback boundaries
 
