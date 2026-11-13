@@ -5,6 +5,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
+. (Join-Path $root 'tools\toolchain.ps1')
+
 $src = Join-Path $root 'src'
 $dist = Join-Path $root 'dist'
 $out = Join-Path $dist 'AIUsageWidget.exe'
@@ -12,89 +14,53 @@ $out = Join-Path $dist 'AIUsageWidget.exe'
 if ($Clean -and (Test-Path $dist)) { Remove-Item $dist -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
 
-function Find-Csc {
-    $paths = @(
-        'C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\MSBuild\Current\Bin\Roslyn\csc.exe',
-        'C:\Program Files\Microsoft Visual Studio\18\BuildTools\MSBuild\Current\Bin\Roslyn\csc.exe'
-    )
-    foreach ($p in $paths) { if (Test-Path $p) { return $p } }
-
-    $glob = @(
-        'C:\Program Files (x86)\Microsoft Visual Studio\*\*\MSBuild\Current\Bin\Roslyn\csc.exe',
-        'C:\Program Files\Microsoft Visual Studio\*\*\MSBuild\Current\Bin\Roslyn\csc.exe'
-    )
-    foreach ($g in $glob) {
-        $hit = Get-ChildItem $g -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($hit) { return $hit.FullName }
-    }
-
-    $framework = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
-    if (Test-Path $framework) { return $framework }
-
-    throw 'No C# compiler found.'
-}
-
-$csc = Find-Csc
+$csc = Find-CSharpCompiler
 $isRoslyn = $csc -match 'Roslyn'
-
-$refDir = 'C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETFramework\v4.0'
-if (-not (Test-Path $refDir)) { throw "Missing .NET Framework v4.0 reference assemblies: $refDir" }
-
-$assemblies = @(
-    'PresentationFramework.dll',
-    'PresentationCore.dll',
-    'WindowsBase.dll',
-    'System.Xaml.dll',
-    'System.dll',
-    'System.Core.dll',
-    'System.Xml.dll',
-    'System.Web.Extensions.dll',
-    'System.Windows.Forms.dll',
-    'System.Drawing.dll',
-    'System.Security.dll'
-)
-
-$refs = @()
-foreach ($a in $assemblies) {
-    $full = Join-Path $refDir $a
-    if (-not (Test-Path $full)) { throw "Missing reference assembly: $full" }
-    $refs += "/r:`"$full`""
+$refDir = Find-ReferenceAssemblies
+$refVersion = Split-Path $refDir -Leaf
+if ($refVersion -notmatch '^v4\.[89]') {
+    Write-Warning "Using $refVersion reference assemblies with the installed .NET Framework 4.8 runtime. Install the .NET Framework 4.8 Developer Pack for a fully matching build."
 }
 
-$sources = @(Get-ChildItem $src -Recurse -Filter *.cs | ForEach-Object { "`"$($_.FullName)`"" })
-if ($sources.Count -eq 0) { throw 'No sources found.' }
+if (-not (Test-NetFramework48Runtime)) {
+    throw '.NET Framework 4.8 runtime was not detected. Install the .NET Framework 4.8 runtime and Developer Pack, then retry.'
+}
 
 $argumentLines = New-Object System.Collections.Generic.List[string]
 $argumentLines.Add('/nologo')
 $argumentLines.Add('/target:winexe')
 $argumentLines.Add('/optimize+')
 $argumentLines.Add('/debug-')
+$argumentLines.Add('/warn:4')
 $argumentLines.Add('/win32manifest:"' + (Join-Path $src 'app.manifest') + '"')
+
+$icon = Join-Path $root 'assets\icon.ico'
+if (Test-Path $icon) {
+    $argumentLines.Add('/win32icon:"' + $icon + '"')
+}
+else {
+    Write-Warning 'assets\icon.ico is missing; the exe will ship without an application icon.'
+}
+
 $argumentLines.Add('/out:"' + $out + '"')
-if ($isRoslyn) { $argumentLines.Add('/langversion:latest') }
-foreach ($r in $refs) { $argumentLines.Add($r) }
-foreach ($s in $sources) { $argumentLines.Add($s) }
+if ($isRoslyn) {
+    $argumentLines.Add('/langversion:latest')
+    $argumentLines.Add('/deterministic+')
+}
 
-# Response file avoids every PowerShell 5.1 native-argument quoting pitfall.
+foreach ($reference in (Get-CompilerReferenceArguments -ReferenceDirectory $refDir)) {
+    $argumentLines.Add($reference)
+}
+foreach ($source in (Get-CSharpSourceFiles -Directory $src)) {
+    $argumentLines.Add($source)
+}
+
+# A UTF-8 response file preserves non-ASCII checkout paths. The previous ASCII
+# encoding silently replaced characters the compiler needed.
 $rsp = Join-Path $dist 'build.rsp'
-[System.IO.File]::WriteAllLines($rsp, $argumentLines, [System.Text.Encoding]::ASCII)
+$exitCode = Invoke-CSharpCompiler -Compiler $csc -ResponseFile $rsp -ArgumentLines $argumentLines
 
-$startInfo = New-Object System.Diagnostics.ProcessStartInfo
-$startInfo.FileName = $csc
-$startInfo.Arguments = '@"' + $rsp + '"'
-$startInfo.UseShellExecute = $false
-$startInfo.RedirectStandardOutput = $true
-$startInfo.RedirectStandardError = $true
-$startInfo.CreateNoWindow = $true
-
-$process = [System.Diagnostics.Process]::Start($startInfo)
-$stdout = $process.StandardOutput.ReadToEnd()
-$stderr = $process.StandardError.ReadToEnd()
-$process.WaitForExit()
-
-if ($stdout) { Write-Host $stdout.TrimEnd() }
-if ($stderr) { Write-Host $stderr.TrimEnd() }
-if ($process.ExitCode -ne 0) { throw "Compilation failed with exit code $($process.ExitCode)" }
+if ($exitCode -ne 0) { throw "Compilation failed with exit code $exitCode" }
 
 $size = [math]::Round((Get-Item $out).Length / 1KB, 1)
 Write-Host "Built $out ($size KB)" -ForegroundColor Green
