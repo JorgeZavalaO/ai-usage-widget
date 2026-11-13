@@ -152,59 +152,33 @@ namespace AiUsageWidget.Tests
         {
             using (var temp = new TempDirectory())
             {
-                var pidFile = temp.Combine("child.pid");
-                var childScript = temp.Write("child.ps1",
-                    "$p = Start-Process -FilePath 'ping.exe' -ArgumentList '-n','60','127.0.0.1' -WindowStyle Hidden -PassThru\r\n" +
-                    "Set-Content -Path '" + pidFile.Replace("'", "''") + "' -Value $p.Id\r\n" +
-                    "Wait-Process -Id $p.Id\r\n");
+                var childName = "aiwchild" + Guid.NewGuid().ToString("N").Substring(0, 8);
+                var childExe = temp.Combine(childName + ".exe");
+                File.Copy(Path.Combine(Environment.SystemDirectory, "ping.exe"), childExe);
 
                 var wrapper = temp.Write("spawn.cmd",
-                    "@echo off\r\npowershell -NoProfile -ExecutionPolicy Bypass -File \"" +
-                    childScript + "\"\r\n");
+                    "@echo off\r\nstart \"\" /b \"" + childExe + "\" -n 60 127.0.0.1 >nul 2>&1\r\n" +
+                    "ping -n 60 127.0.0.1 >nul\r\n");
 
-                var result = new ProcessRunner().Run(wrapper, string.Empty, 4000, CancellationToken.None);
+                var runner = new ProcessRunner();
+                var task = System.Threading.Tasks.Task.Run(
+                    () => runner.Run(wrapper, string.Empty, 3000, CancellationToken.None));
 
-                Assert.True(result.TimedOut);
-
-                int pid = 0;
-                for (int attempt = 0; attempt < 40 && pid == 0; attempt++)
+                var seen = false;
+                for (int attempt = 0; attempt < 30 && !seen; attempt++)
                 {
-                    try
-                    {
-                        if (File.Exists(pidFile))
-                        {
-                            var text = File.ReadAllText(pidFile).Trim();
-                            int.TryParse(text, out pid);
-                        }
-                    }
-                    catch (Exception)
-                    {
-                    }
-
-                    if (pid == 0) Thread.Sleep(100);
+                    if (Process.GetProcessesByName(childName).Length > 0) seen = true;
+                    if (!seen) Thread.Sleep(100);
                 }
 
-                Assert.True(pid > 0, "The synthetic child never reported its PID.");
+                Assert.True(seen, "The synthetic descendant never started.");
+                Assert.True(task.Wait(15000), "The wrapper run did not finish.");
+                Assert.True(task.Result.TimedOut);
 
-                var alive = true;
-                for (int attempt = 0; attempt < 40 && alive; attempt++)
+                var alive = false;
+                for (int attempt = 0; attempt < 40 && !alive; attempt++)
                 {
-                    try
-                    {
-                        using (var process = Process.GetProcessById(pid))
-                        {
-                            alive = !process.HasExited;
-                        }
-                    }
-                    catch (ArgumentException)
-                    {
-                        alive = false;
-                    }
-                    catch (InvalidOperationException)
-                    {
-                        alive = false;
-                    }
-
+                    alive = Process.GetProcessesByName(childName).Length > 0;
                     if (alive) Thread.Sleep(100);
                 }
 
