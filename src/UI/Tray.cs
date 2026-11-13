@@ -61,18 +61,38 @@ namespace AiUsageWidget.UI
             {
                 var value = !_state.Config.AlwaysOnTop;
                 _state.Config.AlwaysOnTop = value;
-                _state.Store.Save();
-                _window.SetTopmost(value);
+                var saved = _state.Store.Save();
+                _window.SetTopmost(_state.Config.AlwaysOnTop);
+                if (!saved.Success)
+                {
+                    System.Windows.MessageBox.Show(
+                        "Always on top was not saved (" + saved.ErrorCode + ").",
+                        AppInfo.Product,
+                        System.Windows.MessageBoxButton.OK,
+                        System.Windows.MessageBoxImage.Warning);
+                }
             };
             menu.Items.Add(_topItem);
 
             _startupItem = new System.Windows.Forms.ToolStripMenuItem("Start with Windows");
             _startupItem.Click += (s, e) =>
             {
-                var value = !_state.Config.LaunchAtLogin;
-                _state.Config.LaunchAtLogin = value;
-                _state.Store.Save();
-                Autostart.Set(value, ExecutablePath());
+                var value = !_state.Autostart.IsEnabledFor(ExecutablePath());
+                var result = LoginItemToggle.Apply(
+                    _state.Config,
+                    _state.Store,
+                    _state.Autostart,
+                    value,
+                    ExecutablePath());
+
+                if (!result.Success)
+                {
+                    System.Windows.MessageBox.Show(
+                        "Launch at login was not changed (" + result.ErrorCode + ").",
+                        AppInfo.Product,
+                        System.Windows.MessageBoxButton.OK,
+                        System.Windows.MessageBoxImage.Warning);
+                }
             };
             menu.Items.Add(_startupItem);
 
@@ -94,7 +114,7 @@ namespace AiUsageWidget.UI
             {
                 _showItem.Text = window.IsVisible ? "Hide" : "Show";
                 _topItem.Checked = _state.Config.AlwaysOnTop;
-                _startupItem.Checked = _state.Config.LaunchAtLogin;
+                _startupItem.Checked = _state.Autostart.IsEnabledFor(ExecutablePath());
             };
 
             _notify = new System.Windows.Forms.NotifyIcon

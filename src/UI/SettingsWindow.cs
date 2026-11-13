@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Media;
 
@@ -10,12 +11,15 @@ namespace AiUsageWidget.UI
         private readonly AppState _state;
         private readonly PasswordBox _keyBox = new PasswordBox();
         private readonly TextBlock _keyStatus = new TextBlock();
+        private CheckBox _startup;
+        private CheckBox _consumption;
+        private bool _updatingToggles;
 
         public SettingsWindow(AppState state, Window owner)
         {
             _state = state;
 
-            Title = "AI Usage â€” Settings";
+            Title = "AI Usage - Settings";
             Width = 380;
             SizeToContent = SizeToContent.Height;
             WindowStyle = WindowStyle.ToolWindow;
@@ -40,6 +44,7 @@ namespace AiUsageWidget.UI
 
             Content = Build();
             RefreshKeyStatus();
+            ReconcileStartup();
         }
 
         private UIElement Build()
@@ -61,6 +66,7 @@ namespace AiUsageWidget.UI
             _keyBox.PasswordChar = '\u2022';
             _keyBox.Padding = new Thickness(6, 4, 6, 4);
             _keyBox.Margin = new Thickness(0, 0, 0, 4);
+            AutomationProperties.SetName(_keyBox, "OpenCode Go API key");
             stack.Children.Add(_keyBox);
 
             _keyStatus.FontSize = 10;
@@ -89,13 +95,7 @@ namespace AiUsageWidget.UI
                 Content = "Clear key",
                 Padding = new Thickness(10, 4, 10, 4)
             };
-            clear.Click += (s, e) =>
-            {
-                _state.Store.SetOpenCodeKey(null);
-                _keyBox.Clear();
-                RefreshKeyStatus();
-                _state.RefreshNow();
-            };
+            clear.Click += (s, e) => ClearKey();
             buttons.Children.Add(clear);
 
             stack.Children.Add(buttons);
@@ -110,47 +110,35 @@ namespace AiUsageWidget.UI
                 Margin = new Thickness(0, 0, 0, 12)
             });
 
-            var startup = new CheckBox
+            _startup = new CheckBox
             {
                 Content = new TextBlock { Text = "Start with Windows", Foreground = Brushes.Black },
                 IsChecked = _state.Config.LaunchAtLogin,
                 Foreground = Brushes.Black,
                 Margin = new Thickness(0, 0, 0, 6)
             };
-            startup.Checked += (s, e) =>
-            {
-                _state.Config.LaunchAtLogin = true;
-                _state.Store.Save();
-                Autostart.Set(true, ExecutablePath());
-            };
-            startup.Unchecked += (s, e) =>
-            {
-                _state.Config.LaunchAtLogin = false;
-                _state.Store.Save();
-                Autostart.Set(false, ExecutablePath());
-            };
-            stack.Children.Add(startup);
+            _startup.Checked += (s, e) => ApplyStartup(true);
+            _startup.Unchecked += (s, e) => ApplyStartup(false);
+            stack.Children.Add(_startup);
 
-            var consumption = new CheckBox
+            _consumption = new CheckBox
             {
                 Content = new TextBlock { Text = "Show local token consumption", Foreground = Brushes.Black },
                 IsChecked = _state.Config.ShowConsumption,
                 Foreground = Brushes.Black,
                 Margin = new Thickness(0, 0, 0, 12)
             };
-            consumption.Checked += (s, e) =>
+            _consumption.Checked += (s, e) => ApplyConsumption(true);
+            _consumption.Unchecked += (s, e) => ApplyConsumption(false);
+            stack.Children.Add(_consumption);
+
+            stack.Children.Add(new TextBlock
             {
-                _state.Config.ShowConsumption = true;
-                _state.Store.Save();
-                _state.RefreshNow();
-            };
-            consumption.Unchecked += (s, e) =>
-            {
-                _state.Config.ShowConsumption = false;
-                _state.Store.Save();
-                _state.RefreshNow();
-            };
-            stack.Children.Add(consumption);
+                Text = AppInfo.Product + " " + AppInfo.VersionWithPrefix,
+                FontSize = 10,
+                Foreground = Brushes.Gray,
+                Margin = new Thickness(0, 0, 0, 10)
+            });
 
             var close = new Button
             {
@@ -170,18 +158,81 @@ namespace AiUsageWidget.UI
             var key = _keyBox.Password;
             if (string.IsNullOrWhiteSpace(key)) return;
 
-            if (!ConfigStore.EncryptionAvailable)
+            var result = _state.Store.SetOpenCodeKey(key.Trim());
+            if (!result.Success)
             {
-                MessageBox.Show(this,
-                    "Windows DPAPI is not available. The key was not saved.",
-                    "AI Usage", MessageBoxButton.OK, MessageBoxImage.Warning);
+                ShowError("The key was not saved.", result.ErrorCode);
                 return;
             }
 
-            _state.Store.SetOpenCodeKey(key.Trim());
             _keyBox.Clear();
             RefreshKeyStatus();
             _state.RefreshNow();
+        }
+
+        private void ClearKey()
+        {
+            var result = _state.Store.SetOpenCodeKey(null);
+            if (!result.Success)
+            {
+                ShowError("The stored key could not be removed.", result.ErrorCode);
+                return;
+            }
+
+            _keyBox.Clear();
+            RefreshKeyStatus();
+            _state.RefreshNow();
+        }
+
+        private void ApplyStartup(bool enabled)
+        {
+            if (_updatingToggles) return;
+
+            var result = LoginItemToggle.Apply(
+                _state.Config,
+                _state.Store,
+                _state.Autostart,
+                enabled,
+                ExecutablePath());
+
+            if (result.Success) return;
+
+            _updatingToggles = true;
+            _startup.IsChecked = _state.Config.LaunchAtLogin;
+            _updatingToggles = false;
+            ShowError("Launch at login was not changed.", result.ErrorCode);
+        }
+
+        private void ApplyConsumption(bool enabled)
+        {
+            if (_updatingToggles) return;
+
+            _state.Config.ShowConsumption = enabled;
+            var result = _state.Store.Save();
+            if (!result.Success)
+            {
+                _updatingToggles = true;
+                _consumption.IsChecked = _state.Config.ShowConsumption;
+                _updatingToggles = false;
+                ShowError("The setting was not changed.", result.ErrorCode);
+                return;
+            }
+
+            _state.ScheduleTimers();
+            _state.RefreshNow();
+        }
+
+        private void ShowError(string message, string code)
+        {
+            var detail = string.IsNullOrEmpty(code) ? string.Empty : " (" + code + ")";
+            if (IsVisible)
+            {
+                MessageBox.Show(this, message + detail, AppInfo.Product, MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+            else
+            {
+                MessageBox.Show(message + detail, AppInfo.Product, MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
         }
 
         private void RefreshKeyStatus()
@@ -189,6 +240,49 @@ namespace AiUsageWidget.UI
             _keyStatus.Text = _state.Store.HasOpenCodeKey
                 ? "A key is stored. Paste a new one to replace it."
                 : "No key stored. The widget uses the key from OpenCode v2 automatically when it is running.";
+        }
+
+        /// <summary>
+        /// The registry is the real source of truth for launch-at-login. A moved
+        /// portable executable leaves a stale Run value, so repair it when the
+        /// setting is enabled, and never show a checkbox state the registry does
+        /// not support.
+        /// </summary>
+        private void ReconcileStartup()
+        {
+            var executablePath = ExecutablePath();
+            var actual = _state.Autostart.IsEnabledFor(executablePath);
+
+            if (_state.Config.LaunchAtLogin && !actual)
+            {
+                var repair = LoginItemToggle.Apply(
+                    _state.Config,
+                    _state.Store,
+                    _state.Autostart,
+                    true,
+                    executablePath);
+
+                actual = repair.Success && _state.Autostart.IsEnabledFor(executablePath);
+                if (!repair.Success)
+                {
+                    ShowError("Launch at login could not be repaired.", repair.ErrorCode);
+                }
+            }
+
+            if (_state.Config.LaunchAtLogin != actual)
+            {
+                _state.Config.LaunchAtLogin = actual;
+                var saved = _state.Store.Save();
+                if (!saved.Success)
+                {
+                    ShowError("The launch-at-login state could not be saved.", saved.ErrorCode);
+                    actual = _state.Config.LaunchAtLogin;
+                }
+            }
+
+            _updatingToggles = true;
+            _startup.IsChecked = actual;
+            _updatingToggles = false;
         }
 
         /// <summary>Development helper: renders the dialog to a PNG for visual review.</summary>
@@ -210,5 +304,3 @@ namespace AiUsageWidget.UI
         }
     }
 }
-
-

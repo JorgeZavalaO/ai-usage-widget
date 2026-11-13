@@ -16,11 +16,34 @@ namespace AiUsageWidget
             var startHidden = Array.IndexOf(args, "--hidden") >= 0;
             var screenshotPath = ParseValue(args, "--screenshot=");
             var settingsScreenshotPath = ParseValue(args, "--screenshot-settings=");
+            var explicitConfigDirectory = ParseValue(args, "--config-dir=");
+
+            // Screenshot runs are isolated development sessions: they must not be
+            // blocked by (or signal) a widget instance that is already running.
+            var isolated = screenshotPath != null || settingsScreenshotPath != null;
+
+            var configDirectory = explicitConfigDirectory;
+            if (configDirectory == null && isolated)
+            {
+                // A screenshot must not read real credentials or contact providers
+                // unless the caller explicitly supplies a configuration directory.
+                configDirectory = System.IO.Path.Combine(
+                    System.IO.Path.GetTempPath(),
+                    "AIUsageWidget-screenshot-" + System.Diagnostics.Process.GetCurrentProcess().Id);
+
+                var screenshotStore = new ConfigStore(configDirectory);
+                screenshotStore.Current.OpenCodeEnabled = false;
+                screenshotStore.Current.CodexEnabled = false;
+                screenshotStore.Current.ClaudeEnabled = false;
+                screenshotStore.Current.ShowConsumption = false;
+                screenshotStore.Save();
+            }
+            if (configDirectory == null) configDirectory = ConfigStore.DefaultDirectory;
 
             bool created;
             using (var mutex = new Mutex(true, MutexName, out created))
             {
-                if (!created)
+                if (!created && !isolated)
                 {
                     try
                     {
@@ -36,8 +59,10 @@ namespace AiUsageWidget
                     return;
                 }
 
-                var store = new ConfigStore();
-                Log.Init(store.DirectoryPath);
+                // Initialize logging before configuration load so a load failure
+                // is captured.
+                Log.Init(configDirectory);
+                var store = new ConfigStore(configDirectory);
 
                 var app = new Application
                 {

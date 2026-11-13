@@ -34,9 +34,15 @@ namespace AiUsageWidget
         public long CacheRead;
         public long CacheWrite;
 
+        /// <summary>
+        /// Non-overlapping total supplied by the provider adapter. A negative
+        /// value means the fields are disjoint and may be summed.
+        /// </summary>
+        public long Total = -1;
+
         public long TotalTokens
         {
-            get { return Input + Output + Reasoning + CacheRead + CacheWrite; }
+            get { return Total >= 0 ? Total : Input + Output + Reasoning + CacheRead + CacheWrite; }
         }
     }
 
@@ -48,7 +54,17 @@ namespace AiUsageWidget
         public ProviderStatus Status = ProviderStatus.Ok;
         public readonly List<UsageWindow> Windows = new List<UsageWindow>();
         public readonly List<Consumption> Consumption = new List<Consumption>();
+
+        /// <summary>Time of the last successful quota fetch. Never advanced by a failed attempt.</summary>
         public DateTimeOffset FetchedAt;
+
+        /// <summary>Time of the most recent quota attempt, successful or not.</summary>
+        public DateTimeOffset LastAttemptAt;
+
+        public DateTimeOffset? ConsumptionUpdatedAt;
+        public string ConsumptionError;
+        public bool ConsumptionStale;
+
         public string ErrorCode;
         public string ErrorMessage;
         public bool FromCache;
@@ -66,14 +82,27 @@ namespace AiUsageWidget
             }
         }
 
+        /// <summary>True when the snapshot carries values that can be rendered.</summary>
         public bool HasData
         {
-            get { return Status == ProviderStatus.Ok || Status == ProviderStatus.Stale; }
+            get { return Status != ProviderStatus.Disabled && Windows.Count > 0; }
+        }
+
+        public bool IsStale
+        {
+            get
+            {
+                return Status == ProviderStatus.Stale ||
+                       Status == ProviderStatus.StaleAuth ||
+                       FromCache;
+            }
         }
     }
 
     public sealed class AppConfig
     {
+        public const int CurrentVersion = 1;
+
         public int Version { get; set; }
         public bool AlwaysOnTop { get; set; }
         public bool LaunchAtLogin { get; set; }
@@ -94,7 +123,7 @@ namespace AiUsageWidget
         {
             return new AppConfig
             {
-                Version = 1,
+                Version = CurrentVersion,
                 AlwaysOnTop = true,
                 LaunchAtLogin = false,
                 Collapsed = false,
@@ -106,6 +135,28 @@ namespace AiUsageWidget
                 ConsumptionMinutes = 30,
                 WarnPercent = 50,
                 CriticalPercent = 80
+            };
+        }
+
+        public AppConfig Clone()
+        {
+            return new AppConfig
+            {
+                Version = Version,
+                AlwaysOnTop = AlwaysOnTop,
+                LaunchAtLogin = LaunchAtLogin,
+                Collapsed = Collapsed,
+                ShowConsumption = ShowConsumption,
+                OpenCodeKeyEnc = OpenCodeKeyEnc,
+                OpenCodeEnabled = OpenCodeEnabled,
+                CodexEnabled = CodexEnabled,
+                ClaudeEnabled = ClaudeEnabled,
+                QuotaMinutes = QuotaMinutes,
+                ConsumptionMinutes = ConsumptionMinutes,
+                WarnPercent = WarnPercent,
+                CriticalPercent = CriticalPercent,
+                WindowX = WindowX,
+                WindowY = WindowY
             };
         }
     }
@@ -125,7 +176,8 @@ namespace AiUsageWidget
     }
 
     public sealed class QuotaException : Exception
-    {        public readonly string Code;
+    {
+        public readonly string Code;
         public readonly int HttpStatus;
 
         public QuotaException(string code, string message, int httpStatus)

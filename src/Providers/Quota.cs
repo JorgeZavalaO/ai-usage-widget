@@ -11,6 +11,33 @@ namespace AiUsageWidget.Providers
     {
         public AppConfig Config;
         public string OpenCodeKey;
+
+        /// <summary>Overrides the user profile directory in tests.</summary>
+        public string Home;
+        public IHttpTransport Transport;
+        public IClock Clock;
+        public IProcessRunner ProcessRunner;
+
+        /// <summary>Overrides the OpenCode CLI path in tests.</summary>
+        public string OpenCodeExecutable;
+
+        /// <summary>Overrides OpenCode service detection in tests.</summary>
+        public bool? OpenCodeServiceRunning;
+
+        public string ResolveHome()
+        {
+            return string.IsNullOrEmpty(Home) ? ProviderUtil.Home : Home;
+        }
+
+        public IHttpTransport ResolveTransport()
+        {
+            return Transport ?? HttpTransport.Default;
+        }
+
+        public IClock ResolveClock()
+        {
+            return Clock ?? SystemClock.Instance;
+        }
     }
 
     public interface IQuotaProvider
@@ -32,7 +59,7 @@ namespace AiUsageWidget.Providers
             try
             {
                 if (!File.Exists(path)) return null;
-                using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
                 using (var reader = new StreamReader(stream, Encoding.UTF8))
                 {
                     return reader.ReadToEnd();
@@ -49,8 +76,7 @@ namespace AiUsageWidget.Providers
             return new ProviderSnapshot
             {
                 Id = provider.Id,
-                Name = provider.Name,
-                FetchedAt = DateTimeOffset.UtcNow
+                Name = provider.Name
             };
         }
 
@@ -68,7 +94,7 @@ namespace AiUsageWidget.Providers
             if (node == null) return;
 
             // Accept several field spellings so a provider-side rename does not break us.
-            double percent = Json.Num(Json.Get(node, "percent"), double.NaN);
+            var percent = Json.Num(Json.Get(node, "percent"), double.NaN);
             if (double.IsNaN(percent)) percent = Json.Num(Json.Get(node, "used_percent"), double.NaN);
             if (double.IsNaN(percent)) percent = Json.Num(Json.Get(node, "utilization"), double.NaN);
             if (double.IsNaN(percent)) return;
@@ -79,18 +105,7 @@ namespace AiUsageWidget.Providers
                 Json.Get(node, "reset_at") ??
                 Json.Get(node, "resetAt"));
 
-            if (percent < 0) percent = 0;
-            if (percent > 100) percent = 100;
-
-            snapshot.Windows.Add(new UsageWindow
-            {
-                Id = key,
-                Label = label,
-                UsedPercent = percent,
-                ResetsAt = resets,
-                WindowMinutes = windowMinutes,
-                IsCycle = isCycle
-            });
+            AddWindowValue(snapshot, key, label, percent, resets, windowMinutes, isCycle);
         }
 
         public static void AddWindowValue(
@@ -102,7 +117,7 @@ namespace AiUsageWidget.Providers
             int? windowMinutes,
             bool isCycle)
         {
-            if (double.IsNaN(percent)) return;
+            if (!Json.IsFinite(percent)) return;
             if (percent < 0) percent = 0;
             if (percent > 100) percent = 100;
 
@@ -139,11 +154,11 @@ namespace AiUsageWidget.Providers
                     minutes = 10080;
                     return;
                 case "weekly_opus":
-                    label = "Week · Opus";
+                    label = "Week \u00b7 Opus";
                     minutes = 10080;
                     return;
                 case "weekly_sonnet":
-                    label = "Week · Sonnet";
+                    label = "Week \u00b7 Sonnet";
                     minutes = 10080;
                     return;
                 default:
@@ -164,7 +179,11 @@ namespace AiUsageWidget.Providers
         public static void SortWindows(ProviderSnapshot snapshot)
         {
             snapshot.Windows.Sort((a, b) =>
-                (a.WindowMinutes ?? int.MaxValue).CompareTo(b.WindowMinutes ?? int.MaxValue));
+            {
+                var byLength = (a.WindowMinutes ?? int.MaxValue).CompareTo(b.WindowMinutes ?? int.MaxValue);
+                if (byLength != 0) return byLength;
+                return string.CompareOrdinal(a.Id, b.Id);
+            });
         }
     }
 
@@ -179,7 +198,7 @@ namespace AiUsageWidget.Providers
             var snapshot = ProviderUtil.NewSnapshot(this);
             snapshot.Plan = "Go";
 
-            var key = ResolveKey(context);
+            var key = ResolveKey(context, token);
             if (string.IsNullOrEmpty(key))
             {
                 snapshot.Status = ProviderStatus.NoCredentials;
@@ -192,10 +211,10 @@ namespace AiUsageWidget.Providers
             {
                 { "Authorization", "Bearer " + key },
                 { "Accept", "application/json" },
-                { "User-Agent", "ai-usage-widget/1.0" }
+                { "User-Agent", "ai-usage-widget/1.1" }
             };
 
-            var result = Http.Get(UsageUrl, headers, 15000);
+            var result = context.ResolveTransport().Get(UsageUrl, headers, 15000, token);
 
             if (result.Status == 401)
             {
@@ -220,33 +239,13 @@ namespace AiUsageWidget.Providers
                     "OpenCode Go returned HTTP " + result.Status + ".", result.Status);
             }
 
-            var root = Json.ParseObject(result.Body);
-            var usage = Json.Obj(Json.Get(root, "usage"));
-            if (usage == null)
-            {
-                throw new QuotaException("parse", "Unexpected OpenCode Go response.", 200);
-            }
-
-            ProviderUtil.AddWindow(snapshot, usage, "rolling", "5h", 300, false);
-            ProviderUtil.AddWindow(snapshot, usage, "weekly", "Week", 10080, false);
-            ProviderUtil.AddWindow(snapshot, usage, "monthly", "Month", null, true);
-
-            ApplyStatusFromWindows(snapshot);
-            snapshot.FetchedAt = DateTimeOffset.UtcNow;
-            return snapshot;
+            var parsed = QuotaParser.ParseOpenCode(result.Body);
+            parsed.Plan = "Go";
+            parsed.FetchedAt = context.ResolveClock().UtcNow;
+            return parsed;
         }
 
-        private static void ApplyStatusFromWindows(ProviderSnapshot snapshot)
-        {
-            if (snapshot.Windows.Count == 0)
-            {
-                snapshot.Status = ProviderStatus.Error;
-                snapshot.ErrorCode = "empty";
-                snapshot.ErrorMessage = "OpenCode Go returned no usage windows.";
-            }
-        }
-
-        private static string ResolveKey(FetchContext context)
+        private static string ResolveKey(FetchContext context, CancellationToken token)
         {
             // 1. Widget settings (decrypted once by ConfigStore, DPAPI at rest).
             if (!string.IsNullOrWhiteSpace(context.OpenCodeKey)) return context.OpenCodeKey.Trim();
@@ -256,12 +255,11 @@ namespace AiUsageWidget.Providers
             if (!string.IsNullOrWhiteSpace(env)) return env.Trim();
 
             // 3. OpenCode v2 local service credential store (zero-config).
-            var serviceKey = OpenCodeService.TryGetGoKey();
+            var serviceKey = OpenCodeService.TryGetGoKey(context, token);
             if (!string.IsNullOrWhiteSpace(serviceKey)) return serviceKey.Trim();
 
             // 4. Legacy auth.json (may hold an expired key; last resort).
-            var path = Path.Combine(
-                ProviderUtil.Home, ".local", "share", "opencode", "auth.json");
+            var path = Path.Combine(context.ResolveHome(), ".local", "share", "opencode", "auth.json");
             var text = ProviderUtil.ReadText(path);
             if (text == null) return null;
 
@@ -280,19 +278,27 @@ namespace AiUsageWidget.Providers
     internal static class OpenCodeService
     {
         private static string _cached;
+        private static string _cachedHome;
         private static DateTime _cachedAt;
 
         public static void Invalidate()
         {
             _cached = null;
+            _cachedHome = null;
         }
 
-        public static bool IsRunning()
+        public static bool IsRunning(FetchContext context)
         {
+            if (context != null && context.OpenCodeServiceRunning.HasValue)
+            {
+                return context.OpenCodeServiceRunning.Value;
+            }
+
             try
             {
-                var path = Path.Combine(
-                    ProviderUtil.Home, ".local", "state", "opencode", "service.json");
+                var path = Path.Combine(context == null
+                    ? ProviderUtil.Home
+                    : context.ResolveHome(), ".local", "state", "opencode", "service.json");
                 var text = ProviderUtil.ReadText(path);
                 if (text == null) return false;
 
@@ -311,14 +317,16 @@ namespace AiUsageWidget.Providers
             }
         }
 
-        public static string TryGetGoKey()
+        public static string TryGetGoKey(FetchContext context, CancellationToken token)
         {
-            if (_cached != null && (DateTime.UtcNow - _cachedAt).TotalMinutes < 10) return _cached;
+            var home = context == null ? ProviderUtil.Home : context.ResolveHome();
+            if (_cached != null &&
+                string.Equals(_cachedHome, home, StringComparison.OrdinalIgnoreCase) &&
+                (DateTime.UtcNow - _cachedAt).TotalMinutes < 10) return _cached;
 
             try
             {
-                var path = Path.Combine(
-                    ProviderUtil.Home, ".local", "state", "opencode", "service.json");
+                var path = Path.Combine(home, ".local", "state", "opencode", "service.json");
                 var text = ProviderUtil.ReadText(path);
                 if (text == null) return null;
 
@@ -327,15 +335,23 @@ namespace AiUsageWidget.Providers
                 var password = Json.Str(Json.Get(info, "password"));
                 if (string.IsNullOrEmpty(url) || string.IsNullOrEmpty(password)) return null;
 
-                var token = Convert.ToBase64String(Encoding.UTF8.GetBytes("opencode:" + password));
+                string reason;
+                if (!Http.IsAllowedLocalServiceUrl(url, out reason))
+                {
+                    Log.Error("opencode-service: refused registration url (" + reason + ")");
+                    return null;
+                }
+
+                var token64 = Convert.ToBase64String(Encoding.UTF8.GetBytes("opencode:" + password));
                 var headers = new Dictionary<string, string>
                 {
-                    { "Authorization", "Basic " + token },
+                    { "Authorization", "Basic " + token64 },
                     { "Accept", "application/json" },
-                    { "User-Agent", "ai-usage-widget/1.0" }
+                    { "User-Agent", "ai-usage-widget/1.1" }
                 };
 
-                var result = Http.Get(url.TrimEnd('/') + "/api/credential", headers, 4000);
+                var transport = context == null ? HttpTransport.Default : context.ResolveTransport();
+                var result = transport.Get(url.TrimEnd('/') + "/api/credential", headers, 4000, token);
                 if (result.Status != 200) return null;
 
                 var root = Json.ParseObject(result.Body);
@@ -356,6 +372,7 @@ namespace AiUsageWidget.Providers
                     if (string.IsNullOrEmpty(key)) continue;
 
                     _cached = key;
+                    _cachedHome = home;
                     _cachedAt = DateTime.UtcNow;
                     return key;
                 }
@@ -386,7 +403,7 @@ namespace AiUsageWidget.Providers
         {
             var snapshot = ProviderUtil.NewSnapshot(this);
 
-            var credentials = ReadCredentials();
+            var credentials = ReadCredentials(context);
             if (credentials == null || string.IsNullOrEmpty(credentials.AccessToken))
             {
                 snapshot.Status = ProviderStatus.NoCredentials;
@@ -399,19 +416,21 @@ namespace AiUsageWidget.Providers
             {
                 { "Authorization", "Bearer " + credentials.AccessToken },
                 { "Accept", "application/json" },
-                { "User-Agent", "ai-usage-widget/1.0" }
+                { "User-Agent", "ai-usage-widget/1.1" }
             };
             if (!string.IsNullOrEmpty(credentials.AccountId))
             {
                 headers["chatgpt-account-id"] = credentials.AccountId;
             }
 
-            var result = Http.Get(UsageUrl, headers, 15000);
+            var result = context.ResolveTransport().Get(UsageUrl, headers, 15000, token);
 
-            if (result.Status == 401 || result.Status == 403)
+            // Only 401 proves the token is unusable. A 403 can mean account
+            // entitlement or an edge block, so it is retried as a transient error.
+            if (result.Status == 401)
             {
                 snapshot.Status = ProviderStatus.StaleAuth;
-                snapshot.ErrorCode = "http_" + result.Status;
+                snapshot.ErrorCode = "http_401";
                 snapshot.ErrorMessage = "Codex token expired. Run Codex once to refresh it.";
                 return snapshot;
             }
@@ -422,62 +441,14 @@ namespace AiUsageWidget.Providers
                     "Codex returned HTTP " + result.Status + ".", result.Status);
             }
 
-            var root = Json.ParseObject(result.Body);
-            if (root == null)
-            {
-                throw new QuotaException("parse", "Unexpected Codex response.", 200);
-            }
-
-            snapshot.Plan = TitleCase(Json.Str(Json.Get(root, "plan_type")));
-
-            var rateLimit = Json.Obj(Json.Get(root, "rate_limit"));
-            AddWindow(snapshot, Json.Obj(Json.Get(rateLimit == null ? null : rateLimit, "primary_window")), "primary");
-            AddWindow(snapshot, Json.Obj(Json.Get(rateLimit == null ? null : rateLimit, "secondary_window")), "secondary");
-
-            if (snapshot.Windows.Count == 0)
-            {
-                snapshot.Status = ProviderStatus.Unsupported;
-                snapshot.ErrorCode = "no_rate_limit";
-                snapshot.ErrorMessage = "Codex did not report usage windows for this plan.";
-            }
-
-            snapshot.FetchedAt = DateTimeOffset.UtcNow;
-            return snapshot;
+            var parsed = QuotaParser.ParseCodex(result.Body);
+            parsed.FetchedAt = context.ResolveClock().UtcNow;
+            return parsed;
         }
 
-        private static void AddWindow(ProviderSnapshot snapshot, Dictionary<string, object> node, string id)
+        private static Credentials ReadCredentials(FetchContext context)
         {
-            if (node == null) return;
-
-            double percent = Json.Num(Json.Get(node, "used_percent"), double.NaN);
-            if (double.IsNaN(percent)) return;
-
-            double seconds = Json.Num(Json.Get(node, "limit_window_seconds"), 0);
-            long resetAt = Json.Long(Json.Get(node, "reset_at"));
-
-            DateTimeOffset? resetsAt = resetAt > 0
-                ? DateTimeOffset.FromUnixTimeSeconds(resetAt)
-                : (DateTimeOffset?)null;
-
-            ProviderUtil.AddWindowValue(
-                snapshot,
-                id,
-                seconds > 0 ? ProviderUtil.MinutesLabel(seconds) : "Window",
-                percent,
-                resetsAt,
-                seconds > 0 ? (int?)(seconds / 60.0) : null,
-                false);
-        }
-
-        private static string TitleCase(string value)
-        {
-            if (string.IsNullOrEmpty(value)) return null;
-            return char.ToUpperInvariant(value[0]) + value.Substring(1);
-        }
-
-        private static Credentials ReadCredentials()
-        {
-            var path = Path.Combine(ProviderUtil.Home, ".codex", "auth.json");
+            var path = Path.Combine(context.ResolveHome(), ".codex", "auth.json");
             var text = ProviderUtil.ReadText(path);
             if (text == null) return null;
 
@@ -511,7 +482,7 @@ namespace AiUsageWidget.Providers
         {
             var snapshot = ProviderUtil.NewSnapshot(this);
 
-            var credentials = ReadCredentials();
+            var credentials = ReadCredentials(context);
             if (credentials == null || string.IsNullOrEmpty(credentials.AccessToken))
             {
                 snapshot.Status = ProviderStatus.NoCredentials;
@@ -520,9 +491,10 @@ namespace AiUsageWidget.Providers
                 return snapshot;
             }
 
-            snapshot.Plan = TitleCase(credentials.SubscriptionType);
+            var plan = TitleCase(credentials.SubscriptionType);
+            snapshot.Plan = plan;
 
-            var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var nowMs = context.ResolveClock().UtcNow.ToUnixTimeMilliseconds();
             if (credentials.ExpiresAtMs > 0 && nowMs >= credentials.ExpiresAtMs)
             {
                 // Never refresh: rotating the refresh token would break the CLI login.
@@ -541,12 +513,12 @@ namespace AiUsageWidget.Providers
                 { "User-Agent", "claude-code/2.0.0" }
             };
 
-            var result = Http.Get(UsageUrl, headers, 15000);
+            var result = context.ResolveTransport().Get(UsageUrl, headers, 15000, token);
 
-            if (result.Status == 401 || result.Status == 403)
+            if (result.Status == 401)
             {
                 snapshot.Status = ProviderStatus.StaleAuth;
-                snapshot.ErrorCode = "http_" + result.Status;
+                snapshot.ErrorCode = "http_401";
                 snapshot.ErrorMessage = "Claude token expired. Open Claude Code once to refresh it.";
                 return snapshot;
             }
@@ -557,56 +529,9 @@ namespace AiUsageWidget.Providers
                     "Claude returned HTTP " + result.Status + ".", result.Status);
             }
 
-            var root = Json.ParseObject(result.Body);
-            if (root == null)
-            {
-                throw new QuotaException("parse", "Unexpected Claude response.", 200);
-            }
-
-            // Newer responses expose a forward-compatible `limits` array; the
-            // legacy top-level windows are still used as a fallback.
-            var limits = Json.Arr(Json.Get(root, "limits"));
-            if (limits != null && limits.Length > 0)
-            {
-                for (int i = 0; i < limits.Length; i++)
-                {
-                    var limit = Json.Obj(limits[i]);
-                    if (limit == null) continue;
-
-                    var kind = Json.Str(Json.Get(limit, "kind"));
-                    if (string.IsNullOrEmpty(kind)) continue;
-
-                    string label;
-                    int? minutes;
-                    ProviderUtil.LabelFor(kind, out label, out minutes);
-
-                    ProviderUtil.AddWindowValue(
-                        snapshot,
-                        kind,
-                        label,
-                        Json.Num(Json.Get(limit, "percent"), double.NaN),
-                        Json.Date(Json.Get(limit, "resets_at")),
-                        minutes,
-                        false);
-                }
-            }
-            else
-            {
-                ProviderUtil.AddWindow(snapshot, root, "five_hour", "5h", 300, false);
-                ProviderUtil.AddWindow(snapshot, root, "seven_day", "Week", 10080, false);
-                ProviderUtil.AddWindow(snapshot, root, "seven_day_opus", "Week · Opus", 10080, false);
-                ProviderUtil.AddWindow(snapshot, root, "seven_day_sonnet", "Week · Sonnet", 10080, false);
-            }
-
-            if (snapshot.Windows.Count == 0)
-            {
-                snapshot.Status = ProviderStatus.Error;
-                snapshot.ErrorCode = "empty";
-                snapshot.ErrorMessage = "Claude returned no usage windows.";
-            }
-
-            snapshot.FetchedAt = DateTimeOffset.UtcNow;
-            return snapshot;
+            var parsed = QuotaParser.ParseClaude(result.Body, plan);
+            parsed.FetchedAt = context.ResolveClock().UtcNow;
+            return parsed;
         }
 
         private static string TitleCase(string value)
@@ -615,9 +540,9 @@ namespace AiUsageWidget.Providers
             return char.ToUpperInvariant(value[0]) + value.Substring(1);
         }
 
-        private static Credentials ReadCredentials()
+        private static Credentials ReadCredentials(FetchContext context)
         {
-            var path = Path.Combine(ProviderUtil.Home, ".claude", ".credentials.json");
+            var path = Path.Combine(context.ResolveHome(), ".claude", ".credentials.json");
             var text = ProviderUtil.ReadText(path);
             if (text == null) return null;
 

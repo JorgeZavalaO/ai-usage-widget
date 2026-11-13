@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -98,6 +99,12 @@ namespace AiUsageWidget.UI
             };
 
             _state.Changed += OnStateChanged;
+            Closed += (s, e) =>
+            {
+                _state.Changed -= OnStateChanged;
+                _tick.Stop();
+                _savePosition.Stop();
+            };
             SetCollapsed(state.Config.Collapsed, false);
             Render();
         }
@@ -209,8 +216,13 @@ namespace AiUsageWidget.UI
                 Child = text,
                 ToolTip = tooltip,
                 Cursor = Cursors.Hand,
-                VerticalAlignment = VerticalAlignment.Center
+                VerticalAlignment = VerticalAlignment.Center,
+                Focusable = true,
+                BorderThickness = new Thickness(0)
             };
+
+            AutomationProperties.SetName(host, tooltip);
+            KeyboardNavigation.SetIsTabStop(host, true);
 
             host.MouseEnter += (s, e) => text.Foreground = TextBrush;
             host.MouseLeave += (s, e) => text.Foreground = MutedBrush;
@@ -219,6 +231,24 @@ namespace AiUsageWidget.UI
             {
                 e.Handled = true;
                 onClick();
+            };
+            host.GotKeyboardFocus += (s, e) =>
+            {
+                host.BorderBrush = MutedBrush;
+                host.BorderThickness = new Thickness(1);
+            };
+            host.LostKeyboardFocus += (s, e) =>
+            {
+                host.BorderBrush = null;
+                host.BorderThickness = new Thickness(0);
+            };
+            host.KeyDown += (s, e) =>
+            {
+                if (e.Key == Key.Enter || e.Key == Key.Space)
+                {
+                    e.Handled = true;
+                    onClick();
+                }
             };
 
             return host;
@@ -364,6 +394,12 @@ namespace AiUsageWidget.UI
 
             stack.Children.Add(head);
 
+            if (snapshot.Status != ProviderStatus.Ok &&
+                snapshot.Status != ProviderStatus.Disabled)
+            {
+                stack.Children.Add(BuildNote(FreshnessText(snapshot), FaintBrush));
+            }
+
             for (int i = 0; i < snapshot.Windows.Count; i++)
             {
                 stack.Children.Add(BuildWindowRow(snapshot.Windows[i]));
@@ -392,7 +428,28 @@ namespace AiUsageWidget.UI
             }
 
             card.Child = stack;
+            AutomationProperties.SetName(card, snapshot.Name + " usage");
             return card;
+        }
+
+        private string FreshnessText(ProviderSnapshot snapshot)
+        {
+            if (snapshot.FetchedAt == DateTimeOffset.MinValue)
+            {
+                return "No successful update yet.";
+            }
+
+            var local = snapshot.FetchedAt.ToLocalTime();
+            return "Last success " + local.ToString("d MMM HH:mm", CultureInfo.InvariantCulture) +
+                   " (" + FormatAge(DateTimeOffset.UtcNow - snapshot.FetchedAt) + " ago).";
+        }
+
+        private static string FormatAge(TimeSpan span)
+        {
+            if (span.TotalMinutes < 1) return "just now";
+            if (span.TotalHours < 1) return ((int)span.TotalMinutes) + "m";
+            if (span.TotalDays < 1) return ((int)span.TotalHours) + "h";
+            return ((int)span.TotalDays) + "d";
         }
 
         private UIElement BuildWindowRow(UsageWindow window)
@@ -489,18 +546,31 @@ namespace AiUsageWidget.UI
 
             string today = null;
             string week = null;
+            string month = null;
 
             for (int i = 0; i < snapshot.Consumption.Count; i++)
             {
                 var item = snapshot.Consumption[i];
                 if (item.Period == "today") today = FormatConsumption(item);
                 else if (item.Period == "7d") week = FormatConsumption(item);
+                else if (item.Period == "30d") month = FormatConsumption(item);
             }
 
-            var parts = new List<string>(2);
+            var parts = new List<string>(3);
             if (!string.IsNullOrEmpty(today)) parts.Add("today " + today);
             if (!string.IsNullOrEmpty(week)) parts.Add("7d " + week);
-            text.Text = string.Join("  ·  ", parts.ToArray());
+            if (!string.IsNullOrEmpty(month)) parts.Add("30d " + month);
+            text.Text = string.Join("  \u00b7  ", parts.ToArray());
+
+            if (snapshot.ConsumptionStale)
+            {
+                text.Text = "stale  \u00b7  " + text.Text;
+                text.Foreground = WarnBrush;
+            }
+            else if (!string.IsNullOrEmpty(snapshot.ConsumptionError))
+            {
+                text.ToolTip = "Consumption could not be refreshed (" + snapshot.ConsumptionError + ").";
+            }
 
             return text;
         }
@@ -516,6 +586,10 @@ namespace AiUsageWidget.UI
             if (tokens > 0)
             {
                 parts.Add(FormatTokens(tokens) + " tok");
+            }
+            else if (!item.CostUsd.HasValue)
+            {
+                parts.Add("0 tok");
             }
             return parts.Count == 0 ? "\u2014" : string.Join(" ", parts.ToArray());
         }
@@ -578,14 +652,24 @@ namespace AiUsageWidget.UI
             settings.ShowDialog();
         }
 
+        private void ShowSaveError(string message, string code)
+        {
+            var detail = string.IsNullOrEmpty(code) ? string.Empty : " (" + code + ")";
+            MessageBox.Show(this, message + detail, AppInfo.Product, MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+
         // ---- interaction ---------------------------------------------------
 
         private void TogglePin()
         {
             var value = !Topmost;
-            Topmost = value;
             _state.Config.AlwaysOnTop = value;
-            _state.Store.Save();
+            var saved = _state.Store.Save();
+            Topmost = _state.Config.AlwaysOnTop;
+            if (!saved.Success)
+            {
+                ShowSaveError("Always on top was not changed.", saved.ErrorCode);
+            }
         }
 
         public void SetTopmost(bool value)
@@ -608,14 +692,28 @@ namespace AiUsageWidget.UI
             if (persist)
             {
                 _state.Config.Collapsed = collapsed;
-                _state.Store.Save();
+                var saved = _state.Store.Save();
+                if (!saved.Success)
+                {
+                    ApplyCollapsedVisual(_state.Config.Collapsed);
+                    ShowSaveError("The collapsed state was not saved.", saved.ErrorCode);
+                }
             }
+        }
+
+        private void ApplyCollapsedVisual(bool collapsed)
+        {
+            _cards.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
+            _footerText.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
+            _collapsedRow.Visibility = collapsed ? Visibility.Visible : Visibility.Collapsed;
+            _collapseGlyph.Text = collapsed ? "\uE70D" : "\uE70E";
         }
 
         public void ShowFromTray()
         {
             if (!IsVisible) Show();
             if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+            EnsureVisible();
             Activate();
         }
 
@@ -658,27 +756,38 @@ namespace AiUsageWidget.UI
             if (resetPassed && (now - _lastResetRefresh).TotalMinutes > 2)
             {
                 _lastResetRefresh = now;
-                _state.RefreshNow();
+                _state.RefreshAfterReset();
             }
+
+            EnsureVisible();
         }
 
         private void UpdateFooter()
         {
             if (_state.Refreshing)
             {
-                _footerText.Text = "Refreshing…";
+                _footerText.Text = "Refreshing\u2026";
                 return;
             }
 
-            if (_state.LastRefresh == DateTimeOffset.MinValue)
+            if (_state.LastSuccessfulRefresh == DateTimeOffset.MinValue)
             {
-                _footerText.Text = "Waiting for first refresh";
+                if (AllProvidersDisabled())
+                {
+                    _footerText.Text = "All providers disabled in Settings";
+                    return;
+                }
+
+                _footerText.Text = _state.LastAttempt == DateTimeOffset.MinValue
+                    ? "Waiting for first refresh"
+                    : "No successful refresh yet";
                 return;
             }
 
             _footerText.Text = "Updated " +
-                               _state.LastRefresh.ToLocalTime().ToString("HH:mm", CultureInfo.InvariantCulture) +
-                               "  ·  every " + Math.Max(1, _state.Config.QuotaMinutes) + " min";
+                               _state.LastSuccessfulRefresh.ToLocalTime().ToString("HH:mm", CultureInfo.InvariantCulture) +
+                               "  \u00b7  every " + Math.Max(1, _state.Config.QuotaMinutes) + " min" +
+                               (_state.LastRunHadErrors ? "  \u00b7  retrying" : string.Empty);
         }
 
         // ---- helpers -------------------------------------------------------
@@ -688,14 +797,8 @@ namespace AiUsageWidget.UI
             var x = _state.Config.WindowX;
             var y = _state.Config.WindowY;
 
-            var left = SystemParameters.VirtualScreenLeft;
-            var top = SystemParameters.VirtualScreenTop;
-            var right = left + SystemParameters.VirtualScreenWidth;
-            var bottom = top + SystemParameters.VirtualScreenHeight;
-
             if (x.HasValue && y.HasValue &&
-                x.Value > left - Width + 80 && x.Value < right - 80 &&
-                y.Value > top - 20 && y.Value < bottom - 60)
+                DesktopPlacement.IsVisible(x.Value, y.Value, Width, 160))
             {
                 Left = x.Value;
                 Top = y.Value;
@@ -705,6 +808,38 @@ namespace AiUsageWidget.UI
             var area = SystemParameters.WorkArea;
             Left = area.Right - Width - 24;
             Top = area.Top + 24;
+        }
+
+        /// <summary>
+        /// Called from the UI tick. Recovers the widget after a monitor is
+        /// disconnected or the resolution changes, and never leaves it entirely
+        /// outside a real monitor's usable area.
+        /// </summary>
+        public void EnsureVisible()
+        {
+            if (!IsVisible) return;
+
+            var width = ActualWidth > 0 ? ActualWidth : Width;
+            var height = ActualHeight > 0 ? ActualHeight : 160;
+
+            if (DesktopPlacement.IsVisible(Left, Top, width, height)) return;
+
+            var area = SystemParameters.WorkArea;
+            Left = area.Right - width - 24;
+            Top = area.Top + 24;
+        }
+
+        private bool AllProvidersDisabled()
+        {
+            var snapshots = _state.Snapshots;
+            if (snapshots.Count == 0) return false;
+
+            for (int i = 0; i < snapshots.Count; i++)
+            {
+                if (snapshots[i].Status != ProviderStatus.Disabled) return false;
+            }
+
+            return true;
         }
 
         private static string FormatRemaining(TimeSpan span)
