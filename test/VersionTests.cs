@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Reflection;
 using System.Text.RegularExpressions;
@@ -11,9 +11,9 @@ namespace AiUsageWidget.Tests
         public static void ApplicationVersion_MatchesAssemblyMetadata()
         {
             var assembly = typeof(AppInfo).Assembly;
-            Assert.Equal(new Version(1, 0, 0, 0), assembly.GetName().Version);
-            Assert.Equal("1.0.0", AppInfo.Version);
-            Assert.Equal("v1.0.0", AppInfo.VersionWithPrefix);
+            Assert.Equal(new Version(1, 1, 0, 0), assembly.GetName().Version);
+            Assert.Equal("1.1.0", AppInfo.Version);
+            Assert.Equal("v1.1.0", AppInfo.VersionWithPrefix);
         }
 
         [Test]
@@ -34,3 +34,4 @@ namespace AiUsageWidget.Tests
         }
     }
 }
+

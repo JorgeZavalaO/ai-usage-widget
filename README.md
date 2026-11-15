@@ -1,4 +1,4 @@
-<p align="center">
+﻿<p align="center">
   <img src="assets/icon.svg" width="76" height="76" alt="AI Usage Widget icon">
 </p>
 
@@ -13,7 +13,7 @@
   <img alt="Platform: Windows 11" src="https://img.shields.io/badge/platform-Windows%2011-0078D4">
   <img alt=".NET Framework 4.8" src="https://img.shields.io/badge/.NET%20Framework-4.8-512BD4">
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-2ea44f">
-  <img alt="Tests: 134 offline" src="https://img.shields.io/badge/tests-134%20offline-2ea44f">
+  <img alt="Tests: 135 offline" src="https://img.shields.io/badge/tests-135%20offline-2ea44f">
   <a href="https://github.com/JorgeZavalaO/ai-usage-widget/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/JorgeZavalaO/ai-usage-widget/actions/workflows/ci.yml/badge.svg"></a>
 </p>
 
@@ -57,7 +57,7 @@ implementation, not a release gate; re-measure on your hardware before quoting t
 
 | | Electron (historical) | This widget |
 |---|---|---|
-| Installer | ~120 MB | ~171 KB executable |
+| Installer | ~120 MB | ~185 KB executable |
 | Private memory | ~150-250 MB | ~51 MB (historical) |
 | Idle CPU | ~0.5 % | not measurable over 30 s (historical) |
 | Runtime dependency | bundled Chromium | .NET Framework 4.8 |
@@ -106,6 +106,11 @@ versioned ZIP plus SHA-256 under `dist\release\`.
 
 The widget starts in the tray. Left-click the tray icon to show or hide the card;
 right-click for refresh, settings, and quit.
+
+Settings groups the OpenCode key, one switch per provider, and behavior. Turning a
+provider off hides its card and stops its collection, and the statistics window
+follows the same switch. Values that are rejected are reported inline instead of
+in a detached dialog.
 
 A few things to know:
 
@@ -220,7 +225,7 @@ Cost is not billed money:
   zero for subscription-backed models.
 - **Codex** and **Claude** session files contain tokens but no price. Their cost
   is estimated from the public list prices published by
-  [models.dev](https://models.dev) — the same catalogue OpenCode uses — at USD per
+  [models.dev](https://models.dev) â€” the same catalogue OpenCode uses â€” at USD per
   million tokens. The filtered catalogue is cached for a day in
   `%APPDATA%\AIUsageWidget\pricing.json`. Per-model attribution comes from
   `turn_context.model` in Codex rollouts and `message.model` in Claude sessions.
@@ -242,9 +247,9 @@ window position, and provider toggles.
 
 Next to it:
 
-- `pricing.json` — the models.dev entries this widget can price, refreshed at most
+- `pricing.json` â€” the models.dev entries this widget can price, refreshed at most
   once a day. Deleting it only removes cost estimates until the next fetch.
-- `usage-history.json` — one record per local date of OpenCode usage, so the chart
+- `usage-history.json` â€” one record per local date of OpenCode usage, so the chart
   does not need to re-run the CLI for past days. Deleting it triggers one backfill.
 
 Persistence rules:
@@ -278,9 +283,11 @@ wait, and reader joins complete.
 
 ## Status and limitations
 
-The 1.0 implementation and its automated gate are complete. The project is public
-as open source; treat the current build as a preview until the remaining manual
-evidence is recorded. The offline suite and Windows CI workflow pass.
+The 1.1 implementation and its automated gate are complete. The 1.0 evidence in
+[`docs/release-1.0-evidence.md`](docs/release-1.0-evidence.md) still describes the
+manual matrix below. The project is public as open source; treat the current build
+as a preview until that manual evidence is recorded. The offline suite and Windows
+CI workflow pass.
 
 Still open:
 
@@ -326,3 +333,5 @@ Jorge Zavala Olivares - [jzavalaolivares@gmail.com](mailto:jzavalaolivares@gmail
 
 For security reports, email the maintainer instead of opening a public issue with
 credentials or logs.
+
+

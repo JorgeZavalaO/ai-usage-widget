@@ -1,15 +1,21 @@
-# Usage statistics window
+﻿# Usage statistics window
 
-Status: implemented after 1.0. The 1.0 plan deliberately excluded "historical
-dashboards"; this document records the scope change and the methodology, so the
-numbers in the window stay explainable.
+Status: shipped in 1.1. The 1.0 plan deliberately excluded "historical dashboards";
+this document records the scope change and the methodology, so the numbers in the
+window stay explainable.
 
 ## What the window shows
 
+- The 30-day total is the headline number and the other metric sits beside it;
+  the selected metric is rendered larger.
 - 30 local calendar dates, oldest first, as stacked bars per provider.
-- Two metrics: **tokens** (input + output) or **cost** (USD).
-- A legend that toggles providers, so a dominant series does not hide the rest.
-- A per-day breakdown on hover.
+- Two metrics: **tokens** (input + output) or **cost** (USD), switched with a
+  segmented control.
+- A per-provider table with both token and cost totals. Each row toggles that
+  provider, so a dominant series does not hide the rest.
+- A per-day breakdown on hover, or with the arrow keys once the chart has focus.
+- The dialog caps itself to the work area and scrolls instead of clipping its
+  footer on small or scaled displays.
 
 ## Why the token chart excludes cached input
 
@@ -75,8 +81,8 @@ drawn as zero usage. Today is always taken from the live call.
 | Provider | Cost source | Nature |
 |---|---|---|
 | OpenCode Go | `cost` in `opencode stats --json` | reported by the CLI; zero for subscription-backed models |
-| Codex | estimated | list price × tokens per model |
-| Claude | estimated | list price × tokens per model |
+| Codex | estimated | list price Ã— tokens per model |
+| Claude | estimated | list price Ã— tokens per model |
 
 List prices come from `https://models.dev/api.json`, the catalogue OpenCode itself
 uses. The document is about 6 MB, so:
@@ -114,11 +120,11 @@ estimate, and a `+` marks days where at least one model had no published price
 
 ## Verification
 
-- `.\test\run.ps1`: 134 passed, 0 failed. The new cases cover price parsing and
+- `.\test\run.ps1`: 135 passed, 0 failed. The new cases cover price parsing and
   caching, cache-inclusive vs. disjoint billing, per-model attribution from both
   session formats, daily buckets, backfill differencing, the once-per-day guard,
   unknown-vs-zero days, and the chart maths.
-- `.\build.ps1`: 171 KB executable, no new dependency and no NuGet restore.
+- `.\build.ps1`: 185 KB executable, no new dependency and no NuGet restore.
 - The window was rendered and reviewed with real local data at both metrics. No
   screenshot with real usage is committed.
 
@@ -130,3 +136,5 @@ estimate, and a `+` marks days where at least one model had no published price
   separate series.
 - Prices are list prices. Discounts, negotiated rates, and flat plans are not
   modelled.
+
+

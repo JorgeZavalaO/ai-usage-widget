@@ -1,14 +1,19 @@
-# Changelog
+﻿# Changelog
 
 All notable changes to this project are documented here.
 
-## Unreleased
+## 1.1.0 - 2026-11-15
 
 ### Added
 
 - Usage statistics window with a 30-day stacked chart per provider (input + output tokens, or cost) and clickable legend filtering.
 - Cost estimates for Codex and Claude from public models.dev list prices, attributed per model and cached for a day. OpenCode keeps reporting its own figure.
 - Persisted per-day OpenCode totals (`usage-history.json`), reconstructed by differencing consecutive CLI windows, with an exact `--days 2` close of yesterday on every refresh.
+
+### Changed
+
+- Settings is grouped into Connections, Providers, and Behavior, with one switch per provider, inline status instead of detached errors, disabled-state actions, and a confirmation before clearing the key.
+- The statistics window leads with the 30-day totals, switches metrics with a segmented control, lists each provider with both token and cost totals, and supports keyboard navigation on the chart.
 
 ### Fixed
 
@@ -51,3 +56,4 @@ All notable changes to this project are documented here.
 - License and public distribution terms are undecided.
 - The manual Windows/desktop matrix (mixed DPI, monitor removal, suspend/resume, second instance) still requires a human run.
 - Windows 10 support is not claimed; Windows 11 is the tested contract.
+

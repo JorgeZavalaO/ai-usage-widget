@@ -1,11 +1,11 @@
-using System.Reflection;
+﻿using System.Reflection;
 
 [assembly: AssemblyTitle("AI Usage Widget")]
 [assembly: AssemblyProduct("AI Usage Widget")]
 [assembly: AssemblyCompany("AI Usage Widget")]
-[assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("1.0.0.0")]
-[assembly: AssemblyInformationalVersion("1.0.0")]
+[assembly: AssemblyVersion("1.1.0.0")]
+[assembly: AssemblyFileVersion("1.1.0.0")]
+[assembly: AssemblyInformationalVersion("1.1.0")]
 [assembly: AssemblyConfiguration("Release")]
 
 namespace AiUsageWidget
@@ -18,7 +18,8 @@ namespace AiUsageWidget
     public static class AppInfo
     {
         public const string Product = "AI Usage Widget";
-        public const string Version = "1.0.0";
+        public const string Version = "1.1.0";
         public const string VersionWithPrefix = "v" + Version;
     }
 }
+
