@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Windows;
@@ -48,8 +48,9 @@ namespace AiUsageWidget.UI
             FontStretches.Normal);
 
         private readonly Brush _gridBrush = Frozen(0x22, 0x0F, 0x17, 0x2A);
-        private readonly Brush _labelBrush = Frozen(0xFF, 0x6B, 0x72, 0x80);
+        private readonly Brush _labelBrush = Frozen(0xFF, 0x66, 0x70, 0x85);
         private readonly Brush _highlightBrush = Frozen(0x14, 0x0F, 0x17, 0x2A);
+        private readonly Pen _focusPen = FrozenPen(0xFF, 0x2F, 0x6F, 0xEB, 1.5);
 
         private List<UsageSeries> _series = new List<UsageSeries>();
         private List<Brush> _brushes = new List<Brush>();
@@ -118,6 +119,11 @@ namespace AiUsageWidget.UI
             var height = ActualHeight;
             if (width <= PadLeft + PadRight || height <= PadTop + PadBottom) return;
 
+            if (IsKeyboardFocused)
+            {
+                dc.DrawRectangle(null, _focusPen, new Rect(0.75, 0.75, width - 1.5, height - 1.5));
+            }
+
             var plotWidth = width - PadLeft - PadRight;
             var plotHeight = height - PadTop - PadBottom;
             var slot = plotWidth / Days;
@@ -142,7 +148,7 @@ namespace AiUsageWidget.UI
                 var y = PadTop + plotHeight - (plotHeight * line / 2.0);
                 dc.DrawRectangle(_gridBrush, null, new Rect(PadLeft, Math.Round(y) + 0.5, plotWidth, 1));
 
-                var text = Text(FormatAxis(value), 9);
+                var text = Text(FormatAxis(value), 9.5);
                 dc.DrawText(text, new Point(PadLeft - 6 - text.Width, y - text.Height / 2.0));
             }
 
@@ -187,7 +193,7 @@ namespace AiUsageWidget.UI
             var last = FirstDayAt(Days - 1);
             if (last != null)
             {
-                var text = Text(ShortDate(last.Date), 9);
+                var text = Text(ShortDate(last.Date), 9.5);
                 dc.DrawText(text, new Point(
                     PadLeft + plotWidth - text.Width,
                     PadTop + plotHeight + 5));
@@ -202,7 +208,7 @@ namespace AiUsageWidget.UI
             var label = ShortDate(day.Date);
             if (label == null) return;
 
-            var text = Text(label, 9);
+            var text = Text(label, 9.5);
             var x = centerX - text.Width / 2.0;
             dc.DrawText(text, new Point(Math.Max(2, Math.Min(x, PadLeft + plotWidth - 40)), PadTop + ActualHeight - PadBottom + 5));
         }
@@ -219,11 +225,30 @@ namespace AiUsageWidget.UI
             SetHighlight(-1);
         }
 
+        /// <summary>
+        /// Keyboard access to the same data the pointer reveals: the window is
+        /// usable without a mouse, and the focused chart draws a ring.
+        /// </summary>
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            base.OnKeyDown(e);
+            if (_series.Count == 0) return;
+
+            var current = _highlight < 0 ? Days - 1 : _highlight;
+
+            if (e.Key == Key.Left) current = Math.Max(0, current - 1);
+            else if (e.Key == Key.Right) current = Math.Min(Days - 1, current + 1);
+            else if (e.Key == Key.Home) current = 0;
+            else if (e.Key == Key.End) current = Days - 1;
+            else return;
+
+            e.Handled = true;
+            SetHighlight(current);
+        }
+
         private string FormatAxis(double value)
         {
-            return _metric == UsageMetric.Cost
-                ? ChartMath.FormatMoney(value)
-                : ChartMath.FormatCompact(value);
+            return ChartMath.FormatAxis(value, _metric);
         }
 
         private static DailyUsage DayAt(UsageSeries series, int index)
@@ -273,6 +298,13 @@ namespace AiUsageWidget.UI
             brush.Freeze();
             return brush;
         }
+
+        private static Pen FrozenPen(byte alpha, byte red, byte green, byte blue, double thickness)
+        {
+            var pen = new Pen(Frozen(alpha, red, green, blue), thickness);
+            pen.Freeze();
+            return pen;
+        }
     }
 
     /// <summary>Pure layout helpers so the chart maths can be tested offline.</summary>
@@ -308,5 +340,19 @@ namespace AiUsageWidget.UI
             if (value >= 1) return "$" + value.ToString("0.00", CultureInfo.InvariantCulture);
             return "$" + value.ToString("0.000", CultureInfo.InvariantCulture);
         }
+
+        /// <summary>
+        /// Axis labels need fewer decimals than the headline figure: "$0", "$5",
+        /// "$7.50" reads better than "$0.000" and "$7.500".
+        /// </summary>
+        public static string FormatAxis(double value, UsageMetric metric)
+        {
+            if (metric != UsageMetric.Cost) return FormatCompact(value);
+            if (value <= 0) return "$0";
+            if (value >= 100) return "$" + value.ToString("0", CultureInfo.InvariantCulture);
+            if (value >= 1) return "$" + value.ToString("0.##", CultureInfo.InvariantCulture);
+            return "$" + value.ToString("0.###", CultureInfo.InvariantCulture);
+        }
     }
 }
+

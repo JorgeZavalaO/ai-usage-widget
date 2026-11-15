@@ -506,6 +506,15 @@ namespace AiUsageWidget.Tests
         }
 
         [Test]
+        public static void ChartMath_AxisLabelsDropNoiseDecimals()
+        {
+            Assert.Equal("$0", ChartMath.FormatAxis(0, UsageMetric.Cost));
+            Assert.Equal("$5", ChartMath.FormatAxis(5, UsageMetric.Cost));
+            Assert.Equal("$7.5", ChartMath.FormatAxis(7.5, UsageMetric.Cost));
+            Assert.Equal("20.0M", ChartMath.FormatAxis(20000000, UsageMetric.Tokens));
+        }
+
+        [Test]
         public static void UsageChart_IndexAtMapsTheSlotUnderThePointer()
         {
             Assert.Equal(-1, UsageChart.IndexAt(0, 620));

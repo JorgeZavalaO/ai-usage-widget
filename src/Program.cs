@@ -121,11 +121,11 @@ namespace AiUsageWidget
                         var statistics = new StatisticsWindow(state, window);
                         statistics.Show();
 
-                        // The first run may need to rebuild a 30-day history from the
-                        // provider CLI, so this timer is deliberately generous.
+                        // A cold run may still be collecting the 30-day history; the
+                        // window says so, and a second run captures the settled state.
                         var timer = new System.Windows.Threading.DispatcherTimer
                         {
-                            Interval = TimeSpan.FromSeconds(35)
+                            Interval = TimeSpan.FromSeconds(8)
                         };
                         timer.Tick += (s, e) =>
                         {
