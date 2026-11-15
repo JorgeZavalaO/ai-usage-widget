@@ -13,7 +13,7 @@
   <img alt="Platform: Windows 11" src="https://img.shields.io/badge/platform-Windows%2011-0078D4">
   <img alt=".NET Framework 4.8" src="https://img.shields.io/badge/.NET%20Framework-4.8-512BD4">
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-2ea44f">
-  <img alt="Tests: 113 offline" src="https://img.shields.io/badge/tests-113%20offline-2ea44f">
+  <img alt="Tests: 134 offline" src="https://img.shields.io/badge/tests-134%20offline-2ea44f">
   <a href="https://github.com/JorgeZavalaO/ai-usage-widget/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/JorgeZavalaO/ai-usage-widget/actions/workflows/ci.yml/badge.svg"></a>
 </p>
 
@@ -38,6 +38,14 @@ Each card also shows local token consumption for today, the last 7 local dates,
 and the last 30 local dates. Cost in USD is shown where the source provides it
 (today that is OpenCode only).
 
+A separate **Usage statistics** window (chart button in the header) plots the
+last 30 local days as stacked bars per provider: input + output tokens, or cost.
+A legend item can be clicked to hide that provider so a smaller series stays
+readable. Cached input is excluded from the token chart because it dominates the
+raw total (in agentic sessions it can exceed 95% of the sum). Methodology, data
+availability, and cost rules are in
+[`docs/statistics-window.md`](docs/statistics-window.md).
+
 The widget is deliberately small: WPF, one executable, no Electron, no bundled
 browser, no background service of its own.
 
@@ -49,7 +57,7 @@ implementation, not a release gate; re-measure on your hardware before quoting t
 
 | | Electron (historical) | This widget |
 |---|---|---|
-| Installer | ~120 MB | ~142 KB executable |
+| Installer | ~120 MB | ~171 KB executable |
 | Private memory | ~150-250 MB | ~51 MB (historical) |
 | Idle CPU | ~0.5 % | not measurable over 30 s (historical) |
 | Runtime dependency | bundled Chromium | .NET Framework 4.8 |
@@ -123,6 +131,8 @@ A few things to know:
   service traffic bypasses the system proxy.
 - Logs contain provider ids and error codes only: no headers, tokens, response
   bodies, or conversation content.
+- List prices are fetched from `https://models.dev/api.json`, which is public and
+  receives no credentials, no account identifiers, and no usage data.
 - Screenshot mode without `--config-dir` uses an isolated temporary configuration
   with providers disabled, so it cannot read real credentials or contact providers.
 
@@ -140,14 +150,18 @@ src/
   Json.cs / Http.cs           in-box JSON + HttpWebRequest helpers
   ProcessRunner.cs            bounded subprocess + Windows job-object cleanup
   Config.cs                   config, DPAPI, autostart, logger
+  Pricing.cs                  models.dev list prices, filtered and cached
   AppState.cs                 refresh scheduler, backoff, snapshot store
   AppInfo.cs                  application version metadata
   Providers/Quota.cs          quota adapters + OpenCode v2 key lookup
   Providers/QuotaParser.cs    offline response normalization
   Providers/Consumption.cs    local token aggregation (cached)
+  Providers/UsageHistory.cs   per-day OpenCode totals on disk
   UI/MainWindow.cs            card, bars, countdowns, collapse
   UI/Tray.cs                  tray icon, tooltip, menu
   UI/SettingsWindow.cs        key entry, toggles, version
+  UI/StatisticsWindow.cs      usage statistics window
+  UI/UsageChart.cs            in-box stacked bar renderer
   UI/DesktopPlacement.cs      monitor work-area placement check
   UI/Screenshot.cs            development visual capture
 test/
@@ -175,6 +189,9 @@ Refresh rules:
   collection.
 - File scans are cached by `(path, size, mtime)`; unchanged files are not reopened,
   and deleted files are pruned.
+- The 30-day OpenCode history is reconstructed only when the statistics window
+  needs it, at most once per day, and about 30 short CLI calls are spent on it.
+- List prices are refreshed at most once per day; a failed fetch keeps the cache.
 
 ## Data sources
 
@@ -197,10 +214,38 @@ Token totals are non-overlapping and defined per provider:
 - **OpenCode**: input, output, reasoning, and cache buckets are reported
   separately. Total = their sum.
 
+Cost is not billed money:
+
+- **OpenCode** reports its own `cost` from the model catalogue it uses. It is
+  zero for subscription-backed models.
+- **Codex** and **Claude** session files contain tokens but no price. Their cost
+  is estimated from the public list prices published by
+  [models.dev](https://models.dev) — the same catalogue OpenCode uses — at USD per
+  million tokens. The filtered catalogue is cached for a day in
+  `%APPDATA%\AIUsageWidget\pricing.json`. Per-model attribution comes from
+  `turn_context.model` in Codex rollouts and `message.model` in Claude sessions.
+- A subscription plan is still charged flat. The figure is the API-equivalent
+  value of the usage, not an invoice. A `+` in the statistics window means some
+  models had no published price and were counted in tokens but not in cost.
+
+OpenCode is the only provider whose daily history has to be reconstructed: its
+CLI answers "the last N days" and cannot enumerate days. The widget calls
+`--days 0..30` once, in the background, when the statistics window first needs
+the history, and stores each reconstructed day in
+`%APPDATA%\AIUsageWidget\usage-history.json`. On later refreshes it only calls
+`--days 2` to close yesterday exactly.
+
 ## Configuration
 
 `%APPDATA%\AIUsageWidget\config.json` stores thresholds, intervals, autostart,
 window position, and provider toggles.
+
+Next to it:
+
+- `pricing.json` — the models.dev entries this widget can price, refreshed at most
+  once a day. Deleting it only removes cost estimates until the next fetch.
+- `usage-history.json` — one record per local date of OpenCode usage, so the chart
+  does not need to re-run the CLI for past days. Deleting it triggers one backfill.
 
 Persistence rules:
 
@@ -248,7 +293,10 @@ Still open:
 
 Other limits:
 
-- Cost in USD is only available for OpenCode; Codex and Claude show tokens.
+- Cost in USD is an API list-price estimate for Codex and Claude, and the
+  provider's own figure for OpenCode; it is not a bill.
+- The token chart omits cached input; the summary and the cards' `30d` totals
+  include it.
 - Claude's response shape is undocumented; parsing prefers `limits[]` and falls
   back to the legacy `five_hour` / `seven_day` fields.
 - OpenCode auto-detection needs the v2 background service running; otherwise paste

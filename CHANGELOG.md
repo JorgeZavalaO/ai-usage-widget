@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here.
 
+## Unreleased
+
+### Added
+
+- Usage statistics window with a 30-day stacked chart per provider (input + output tokens, or cost) and clickable legend filtering.
+- Cost estimates for Codex and Claude from public models.dev list prices, attributed per model and cached for a day. OpenCode keeps reporting its own figure.
+- Persisted per-day OpenCode totals (`usage-history.json`), reconstructed by differencing consecutive CLI windows, with an exact `--days 2` close of yesterday on every refresh.
+
+### Fixed
+
+- Missing daily history is reported as unknown rather than drawn as zero usage.
+
 ## 1.0.0 - 2026-11-13
 
 ### Added
