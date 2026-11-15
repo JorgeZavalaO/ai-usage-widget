@@ -16,6 +16,11 @@ namespace AiUsageWidget.Providers
         public long CacheWrite;
         public long Total = -1;
 
+        public long TotalTokens
+        {
+            get { return Total >= 0 ? Total : Input + Output + Reasoning + CacheRead + CacheWrite; }
+        }
+
         public void Add(TokenTotals other)
         {
             Input += other.Input;
@@ -44,6 +49,15 @@ namespace AiUsageWidget.Providers
     {
         public ConsumptionStatus Status = ConsumptionStatus.NoData;
         public readonly List<Consumption> Items = new List<Consumption>();
+
+        /// <summary>Local daily series for the chart, oldest first.</summary>
+        public readonly List<DailyUsage> Daily = new List<DailyUsage>();
+
+        /// <summary>
+        /// True when a date in the last 30 is unknown rather than genuinely empty.
+        /// </summary>
+        public bool DailyIncomplete;
+
         public string ErrorCode;
         public bool Partial;
 
@@ -89,6 +103,7 @@ namespace AiUsageWidget.Providers
             public long Size;
             public DateTime MTimeUtc;
             public Dictionary<string, TokenTotals> Days;
+            public Dictionary<string, TokenTotals> ByModel;
             public bool HasRecords;
             public bool SkippedNoTimestamp;
             public DateTimeOffset LastSeenUtc;
@@ -96,27 +111,45 @@ namespace AiUsageWidget.Providers
 
         private sealed class ParseOutcome
         {
-            public Dictionary<string, TokenTotals> Days = new Dictionary<string, TokenTotals>(StringComparer.Ordinal);
+            public readonly Dictionary<string, TokenTotals> Days =
+                new Dictionary<string, TokenTotals>(StringComparer.Ordinal);
+
+            /// <summary>Keyed by "yyyy-MM-dd|model" so list prices can be applied.</summary>
+            public readonly Dictionary<string, TokenTotals> ByModel =
+                new Dictionary<string, TokenTotals>(StringComparer.Ordinal);
+
             public bool HasRecords;
             public bool SkippedNoTimestamp;
         }
 
         private const int MaxCacheEntries = 10000;
+        private const int ChartDays = 30;
+        private const int BackfillBudgetMs = 75000;
 
         private readonly Dictionary<string, FileCache> _cache =
             new Dictionary<string, FileCache>(StringComparer.OrdinalIgnoreCase);
         private readonly object _cacheGate = new object();
         private readonly IClock _clock;
         private readonly IProcessRunner _runner;
+        private readonly IPriceCatalog _prices;
+        private UsageHistory _history;
+        private string _historyDirectory;
+        private DateTime _backfillAttemptDate = DateTime.MinValue;
 
         public ConsumptionService(IClock clock, IProcessRunner runner)
+            : this(clock, runner, null)
+        {
+        }
+
+        public ConsumptionService(IClock clock, IProcessRunner runner, IPriceCatalog prices)
         {
             _clock = clock ?? SystemClock.Instance;
             _runner = runner ?? new ProcessRunner();
+            _prices = prices;
         }
 
         public ConsumptionService()
-            : this(SystemClock.Instance, new ProcessRunner())
+            : this(SystemClock.Instance, new ProcessRunner(), null)
         {
         }
 
@@ -141,6 +174,9 @@ namespace AiUsageWidget.Providers
                 _cache.Clear();
                 CacheHits = 0;
                 CacheMisses = 0;
+                _history = null;
+                _historyDirectory = null;
+                _backfillAttemptDate = DateTime.MinValue;
             }
         }
 
@@ -152,6 +188,7 @@ namespace AiUsageWidget.Providers
                 if (providerId == "codex")
                 {
                     return Scan(
+                        providerId,
                         Path.Combine(context.ResolveHome(), ".codex", "sessions"),
                         "rollout-*.jsonl",
                         ParseCodexFile,
@@ -161,6 +198,7 @@ namespace AiUsageWidget.Providers
                 if (providerId == "claude")
                 {
                     return Scan(
+                        providerId,
                         Path.Combine(context.ResolveHome(), ".claude", "projects"),
                         "*.jsonl",
                         ParseClaudeFile,
@@ -198,7 +236,7 @@ namespace AiUsageWidget.Providers
             var result = ConsumptionResult.Ok();
             var failures = 0;
 
-            AddOpenCodePeriod(result, executable, 0, "today", token, ref failures);
+            var todayItem = AddOpenCodePeriod(result, executable, 0, "today", token, ref failures);
             AddOpenCodePeriod(result, executable, 7, "7d", token, ref failures);
             AddOpenCodePeriod(result, executable, 30, "30d", token, ref failures);
 
@@ -207,12 +245,32 @@ namespace AiUsageWidget.Providers
                 return ConsumptionResult.Failed(failures > 0 ? "stats_failed" : "stats_empty");
             }
 
+            var today = _clock.LocalNow.Date;
+            var history = LoadHistory(context);
+
+            if (todayItem != null)
+            {
+                history.Set(DateKey(today), ToHistoryDay(todayItem, false));
+                FinalizeYesterday(executable, history, today, todayItem, token);
+            }
+
+            if (context.AllowSlowBackfill && NeedsBackfill(history, today) && CanAttemptBackfill(today))
+            {
+                try { BackfillOpenCode(executable, history, today, token); }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex) { Log.Error("consumption/opencode history: " + ex.GetType().Name); }
+            }
+
+            history.Prune(today.AddDays(-UsageHistory.RetentionDays));
+            history.Save();
+            BuildOpenCodeDaily(result, history, today);
+
             result.Partial = failures > 0;
             if (failures > 0) result.ErrorCode = "stats_partial";
             return result;
         }
 
-        private void AddOpenCodePeriod(
+        private Consumption AddOpenCodePeriod(
             ConsumptionResult target,
             string executable,
             int days,
@@ -222,26 +280,36 @@ namespace AiUsageWidget.Providers
         {
             token.ThrowIfCancellationRequested();
 
-            var json = RunOpenCodeStats(executable, days, token);
-            if (json == null)
+            var item = ReadOpenCodeTotals(executable, days, token);
+            if (item == null)
             {
                 failures++;
-                return;
+                return null;
             }
 
+            item.Period = period;
+            target.Items.Add(item);
+            return item;
+        }
+
+        /// <summary>
+        /// One CLI call. Returns null when the command failed, timed out, or
+        /// produced an unparsable payload; callers treat that as a missing sample,
+        /// never as zero usage.
+        /// </summary>
+        private Consumption ReadOpenCodeTotals(string executable, int days, CancellationToken token)
+        {
+            var json = RunOpenCodeStats(executable, days, token);
+            if (json == null) return null;
+
             var root = Json.ParseObject(json);
-            if (root == null)
-            {
-                failures++;
-                return;
-            }
+            if (root == null) return null;
 
             var tokens = Json.Obj(Json.Get(root, "tokens"));
             var cache = Json.Obj(Json.Get(tokens, "cache"));
 
             var item = new Consumption
             {
-                Period = period,
                 CostUsd = Json.Num(Json.Get(root, "cost"), double.NaN),
                 Input = Json.Long(Json.Get(tokens, "input")),
                 Output = Json.Long(Json.Get(tokens, "output")),
@@ -254,7 +322,7 @@ namespace AiUsageWidget.Providers
             // OpenCode exposes prompt, output, reasoning, and cache buckets
             // separately and derives cost from each; the auditable total is the sum.
             item.Total = item.Input + item.Output + item.Reasoning + item.CacheRead + item.CacheWrite;
-            target.Items.Add(item);
+            return item;
         }
 
         private string RunOpenCodeStats(string executable, int days, CancellationToken token)
@@ -268,9 +336,180 @@ namespace AiUsageWidget.Providers
             return string.IsNullOrWhiteSpace(result.StandardOutput) ? null : result.StandardOutput;
         }
 
+        // ------------------------------------------------------- opencode history
+
+        private UsageHistory LoadHistory(FetchContext context)
+        {
+            var directory = context.ResolveDataDirectory();
+            if (_history == null ||
+                !string.Equals(_historyDirectory, directory, StringComparison.OrdinalIgnoreCase))
+            {
+                _history = UsageHistory.Load(directory);
+                _historyDirectory = directory;
+            }
+            return _history;
+        }
+
+        private static string DateKey(DateTime date)
+        {
+            return date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        }
+
+        private static HistoryDay ToHistoryDay(Consumption item, bool final)
+        {
+            return new HistoryDay
+            {
+                Input = item.Input,
+                Output = item.Output,
+                Reasoning = item.Reasoning,
+                CacheRead = item.CacheRead,
+                CacheWrite = item.CacheWrite,
+                Total = item.TotalTokens,
+                CostUsd = item.CostUsd,
+                Final = final
+            };
+        }
+
+        /// <summary>
+        /// A day captured while the widget was running stops updating at midnight.
+        /// One extra "--days 2" call closes yesterday exactly, so the chart and the
+        /// live 7-day total cannot disagree.
+        /// </summary>
+        private void FinalizeYesterday(
+            string executable,
+            UsageHistory history,
+            DateTime today,
+            Consumption todayTotals,
+            CancellationToken token)
+        {
+            var yesterday = DateKey(today.AddDays(-1));
+            var stored = history.Get(yesterday);
+            if (stored != null && stored.Final) return;
+
+            var window = ReadOpenCodeTotals(executable, 2, token);
+            if (window == null) return;
+
+            var day = Difference(window, todayTotals);
+            day.Final = true;
+            history.Set(yesterday, day);
+        }
+
+        private static bool NeedsBackfill(UsageHistory history, DateTime today)
+        {
+            for (int age = 1; age < ChartDays; age++)
+            {
+                var day = history.Get(DateKey(today.AddDays(-age)));
+                if (day == null || !day.Final) return true;
+            }
+            return false;
+        }
+
+        private bool CanAttemptBackfill(DateTime today)
+        {
+            return _backfillAttemptDate != today;
+        }
+
+        /// <summary>
+        /// Reconstructs the last 30 days from consecutive CLI windows:
+        /// S(k) covers today plus k-1 previous dates, so day k-1 ago is
+        /// S(k) - S(k-1). The CLI answers "--days 0" and "--days 1" with the same
+        /// value, which is why the first difference starts at k = 2.
+        ///
+        /// This runs at most once per day and only when the statistics window asks
+        /// for it: it costs about 30 short-lived CLI calls.
+        /// </summary>
+        private void BackfillOpenCode(
+            string executable,
+            UsageHistory history,
+            DateTime today,
+            CancellationToken token)
+        {
+            _backfillAttemptDate = today;
+
+            var started = _clock.UtcNow;
+            Consumption previous = null;
+
+            for (int days = 0; days <= ChartDays; days++)
+            {
+                if ((_clock.UtcNow - started).TotalMilliseconds > BackfillBudgetMs) break;
+
+                var sample = ReadOpenCodeTotals(executable, days, token);
+                if (sample == null) break;
+
+                if (previous != null && days >= 2)
+                {
+                    var day = Difference(sample, previous);
+                    day.Final = true;
+                    history.Set(DateKey(today.AddDays(-(days - 1))), day);
+                }
+
+                previous = sample;
+            }
+        }
+
+        private static HistoryDay Difference(Consumption later, Consumption earlier)
+        {
+            var day = new HistoryDay
+            {
+                Input = Math.Max(0, later.Input - earlier.Input),
+                Output = Math.Max(0, later.Output - earlier.Output),
+                Reasoning = Math.Max(0, later.Reasoning - earlier.Reasoning),
+                CacheRead = Math.Max(0, later.CacheRead - earlier.CacheRead),
+                CacheWrite = Math.Max(0, later.CacheWrite - earlier.CacheWrite)
+            };
+
+            day.Total = day.Input + day.Output + day.Reasoning + day.CacheRead + day.CacheWrite;
+
+            if (later.CostUsd.HasValue && earlier.CostUsd.HasValue)
+            {
+                var cost = later.CostUsd.Value - earlier.CostUsd.Value;
+                day.CostUsd = cost < 0 ? 0 : cost;
+            }
+
+            return day;
+        }
+
+        private static void BuildOpenCodeDaily(ConsumptionResult result, UsageHistory history, DateTime today)
+        {
+            result.Daily.Clear();
+            var incomplete = false;
+
+            for (int age = ChartDays - 1; age >= 0; age--)
+            {
+                var key = DateKey(today.AddDays(-age));
+                var day = history.Get(key);
+                var point = new DailyUsage { Date = key };
+
+                if (day == null)
+                {
+                    // Today is always known once the CLI answers; a missing or
+                    // provisional past date means the history is not settled yet.
+                    if (age > 0) incomplete = true;
+                }
+                else
+                {
+                    point.Input = day.Input;
+                    point.Output = day.Output;
+                    point.Reasoning = day.Reasoning;
+                    point.CacheRead = day.CacheRead;
+                    point.CacheWrite = day.CacheWrite;
+                    point.Total = day.Total;
+                    point.Billable = day.Input + day.Output;
+                    point.CostUsd = day.CostUsd;
+
+                    if (age > 0 && !day.Final) incomplete = true;
+                }
+
+                result.Daily.Add(point);
+            }
+
+            result.DailyIncomplete = incomplete;
+        }
+
         // --------------------------------------------------------------- file scan
 
         private ConsumptionResult Scan(
+            string providerId,
             string root,
             string pattern,
             Func<string, CancellationToken, HashSet<string>, ParseOutcome> parser,
@@ -283,6 +522,7 @@ namespace AiUsageWidget.Providers
             var files = SafeEnumerate(root, pattern, out enumerateError);
 
             var days = new Dictionary<string, TokenTotals>(StringComparer.Ordinal);
+            var byModel = new Dictionary<string, TokenTotals>(StringComparer.Ordinal);
             var seenEvents = new HashSet<string>(StringComparer.Ordinal);
             var seenFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var anyRecords = false;
@@ -322,6 +562,7 @@ namespace AiUsageWidget.Providers
                         cached.LastSeenUtc = now;
                         CacheHits++;
                         Merge(days, cached.Days);
+                        Merge(byModel, cached.ByModel);
                         anyRecords |= cached.HasRecords;
                         skippedNoTimestamp |= cached.SkippedNoTimestamp;
                         continue;
@@ -351,6 +592,7 @@ namespace AiUsageWidget.Providers
                         Size = size,
                         MTimeUtc = mtime,
                         Days = parsed.Days,
+                        ByModel = parsed.ByModel,
                         HasRecords = parsed.HasRecords,
                         SkippedNoTimestamp = parsed.SkippedNoTimestamp,
                         LastSeenUtc = now
@@ -358,6 +600,7 @@ namespace AiUsageWidget.Providers
                 }
 
                 Merge(days, parsed.Days);
+                Merge(byModel, parsed.ByModel);
                 anyRecords |= parsed.HasRecords;
                 skippedNoTimestamp |= parsed.SkippedNoTimestamp;
             }
@@ -372,8 +615,14 @@ namespace AiUsageWidget.Providers
                     : ConsumptionResult.NoData(null);
             }
 
+            if (_prices != null)
+            {
+                try { _prices.EnsureLoaded(token); }
+                catch (OperationCanceledException) { }
+            }
+
             var result = ConsumptionResult.Ok();
-            result.Items.AddRange(Aggregate(days));
+            Aggregate(result, days, byModel, providerId);
             result.Partial = hadError;
             if (hadError) result.ErrorCode = "read_partial";
             return result;
@@ -413,6 +662,7 @@ namespace AiUsageWidget.Providers
         private ParseOutcome ParseCodexFile(string path, CancellationToken token, HashSet<string> seenEvents)
         {
             var outcome = new ParseOutcome();
+            var model = "unknown";
 
             using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete,
                        64 * 1024, FileOptions.SequentialScan))
@@ -422,6 +672,15 @@ namespace AiUsageWidget.Providers
                 while ((line = reader.ReadLine()) != null)
                 {
                     token.ThrowIfCancellationRequested();
+
+                    if (line.IndexOf("\"turn_context\"", StringComparison.Ordinal) >= 0)
+                    {
+                        var contextRoot = Json.ParseObject(line);
+                        var contextPayload = Json.Obj(Json.Get(contextRoot, "payload"));
+                        var name = Json.Str(Json.Get(contextPayload, "model"));
+                        if (!string.IsNullOrEmpty(name)) model = name;
+                        continue;
+                    }
 
                     if (line.IndexOf("token_count", StringComparison.Ordinal) < 0) continue;
                     if (line.IndexOf("last_token_usage", StringComparison.Ordinal) < 0) continue;
@@ -462,7 +721,7 @@ namespace AiUsageWidget.Providers
 
                     // input_tokens already includes cached input and output_tokens
                     // already includes reasoning, so they are subsets, not addends.
-                    Bucket(outcome.Days, LocalKey(date.Value)).Add(new TokenTotals
+                    var totals = new TokenTotals
                     {
                         Input = input,
                         Output = output,
@@ -470,7 +729,11 @@ namespace AiUsageWidget.Providers
                         CacheRead = cacheRead,
                         CacheWrite = cacheWrite,
                         Total = input + output
-                    });
+                    };
+
+                    var key = LocalKey(date.Value);
+                    Bucket(outcome.Days, key).Add(totals);
+                    Bucket(outcome.ByModel, key + "|" + model).Add(totals);
                 }
             }
 
@@ -520,17 +783,23 @@ namespace AiUsageWidget.Providers
                     var output = Json.Long(Json.Get(usage, "output_tokens"));
                     var cacheRead = Json.Long(Json.Get(usage, "cache_read_input_tokens"));
                     var cacheWrite = Json.Long(Json.Get(usage, "cache_creation_input_tokens"));
+                    var model = Json.Str(Json.Get(message, "model"));
+                    if (string.IsNullOrEmpty(model)) model = "unknown";
 
                     // Anthropic reports cache reads/writes outside input_tokens;
                     // they are disjoint billable buckets and must be added.
-                    Bucket(outcome.Days, LocalKey(date.Value)).Add(new TokenTotals
+                    var totals = new TokenTotals
                     {
                         Input = input,
                         Output = output,
                         CacheRead = cacheRead,
                         CacheWrite = cacheWrite,
                         Total = input + output + cacheRead + cacheWrite
-                    });
+                    };
+
+                    var key = LocalKey(date.Value);
+                    Bucket(outcome.Days, key).Add(totals);
+                    Bucket(outcome.ByModel, key + "|" + model).Add(totals);
                 }
             }
 
@@ -563,12 +832,15 @@ namespace AiUsageWidget.Providers
             }
         }
 
-        private List<Consumption> Aggregate(Dictionary<string, TokenTotals> days)
+        private void Aggregate(
+            ConsumptionResult target,
+            Dictionary<string, TokenTotals> days,
+            Dictionary<string, TokenTotals> byModel,
+            string providerId)
         {
             var today = _clock.LocalNow.Date;
             var todayKey = today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
-            var result = new List<Consumption>();
             var todayTotals = new TokenTotals();
             var weekTotals = new TokenTotals();
             var monthTotals = new TokenTotals();
@@ -592,12 +864,89 @@ namespace AiUsageWidget.Providers
                 monthTotals.Add(pair.Value);
             }
 
-            if (!any) return result;
+            if (!any) return;
 
-            result.Add(ToConsumption("today", todayTotals));
-            result.Add(ToConsumption("7d", weekTotals));
-            result.Add(ToConsumption("30d", monthTotals));
-            return result;
+            target.Items.Add(ToConsumption("today", todayTotals));
+            target.Items.Add(ToConsumption("7d", weekTotals));
+            target.Items.Add(ToConsumption("30d", monthTotals));
+
+            // Exactly ChartDays points, oldest first. A date with no records is a
+            // real zero for a local file scan: the file was read end to end.
+            for (int age = ChartDays - 1; age >= 0; age--)
+            {
+                var key = DateKey(today.AddDays(-age));
+
+                TokenTotals totals;
+                days.TryGetValue(key, out totals);
+                if (totals == null) totals = new TokenTotals();
+
+                var point = new DailyUsage
+                {
+                    Date = key,
+                    Input = totals.Input,
+                    Output = totals.Output,
+                    Reasoning = totals.Reasoning,
+                    CacheRead = totals.CacheRead,
+                    CacheWrite = totals.CacheWrite,
+                    Total = totals.Total,
+                    Billable = Billable(providerId, totals)
+                };
+
+                EstimateCost(point, byModel, key, providerId);
+                target.Daily.Add(point);
+            }
+
+            target.DailyIncomplete = false;
+        }
+
+        private static long Billable(string providerId, TokenTotals totals)
+        {
+            if (providerId == "codex")
+            {
+                // Cached input is inside Input and is not fresh prompt work.
+                var fresh = totals.Input - totals.CacheRead;
+                if (fresh < 0) fresh = 0;
+                return fresh + totals.Output;
+            }
+
+            return totals.Input + totals.Output;
+        }
+
+        private void EstimateCost(
+            DailyUsage point,
+            Dictionary<string, TokenTotals> byModel,
+            string dateKey,
+            string providerId)
+        {
+            if (byModel == null || byModel.Count == 0 || _prices == null) return;
+
+            var prefix = dateKey + "|";
+            var cost = 0.0;
+            var priced = false;
+            long unpriced = 0;
+
+            foreach (var pair in byModel)
+            {
+                if (!pair.Key.StartsWith(prefix, StringComparison.Ordinal)) continue;
+
+                var model = pair.Key.Substring(prefix.Length);
+                var totals = pair.Value;
+
+                ModelPrice price;
+                if (!_prices.TryGet(providerId, model, out price))
+                {
+                    unpriced += totals.TotalTokens;
+                    continue;
+                }
+
+                priced = true;
+                cost += providerId == "codex"
+                    ? price.CostInclusiveInput(totals.Input, totals.Output, totals.CacheRead)
+                    : price.CostDisjoint(totals.Input, totals.Output, totals.CacheRead, totals.CacheWrite);
+            }
+
+            point.UnpricedTokens = unpriced;
+            if (priced) point.CostUsd = cost;
         }
 
         private static Consumption ToConsumption(string period, TokenTotals totals)

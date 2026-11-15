@@ -30,6 +30,7 @@ namespace AiUsageWidget
         private bool _pendingQuota;
         private bool _pendingConsumption;
         private bool _pendingManual;
+        private bool _backfillRequested;
         private DateTimeOffset _nextQuotaDue;
         private DateTimeOffset _nextConsumptionDue;
 
@@ -64,7 +65,10 @@ namespace AiUsageWidget
             Store = store;
             Autostart = autostart ?? new RegistryAutostart();
             _clock = clock ?? SystemClock.Instance;
-            _consumption = consumption ?? new ConsumptionService(_clock, new ProcessRunner());
+            _consumption = consumption ?? new ConsumptionService(
+                _clock,
+                new ProcessRunner(),
+                new PriceCatalog(store.DirectoryPath, HttpTransport.Default, _clock));
 
             _quotaProviders = new List<IQuotaProvider>();
             if (providers != null)
@@ -132,6 +136,16 @@ namespace AiUsageWidget
         public void RefreshNow()
         {
             QueueRefresh(true, true, true);
+        }
+
+        /// <summary>
+        /// Asks the next refresh to rebuild the 30-day local history. The task is
+        /// expensive, so it is only requested when a view actually needs it.
+        /// </summary>
+        public void RequestHistoryBackfill()
+        {
+            _backfillRequested = true;
+            QueueRefresh(false, true, true);
         }
 
         /// <summary>
@@ -254,6 +268,9 @@ namespace AiUsageWidget
                 Raise();
 
                 var config = Store.Current.Clone();
+                var backfill = consumption && _backfillRequested;
+                if (consumption) _backfillRequested = false;
+
                 var context = new FetchContext
                 {
                     Config = config,
@@ -261,7 +278,9 @@ namespace AiUsageWidget
                     Home = ProviderUtil.Home,
                     Transport = HttpTransport.Default,
                     Clock = _clock,
-                    ProcessRunner = new ProcessRunner()
+                    ProcessRunner = new ProcessRunner(),
+                    DataDirectory = Store.DirectoryPath,
+                    AllowSlowBackfill = backfill
                 };
 
                 if (quota)
@@ -469,10 +488,14 @@ namespace AiUsageWidget
             var result = _consumption.Fetch(snapshot.Id, context, token);
 
             clone.Consumption.Clear();
+            clone.Daily.Clear();
+            clone.DailyIncomplete = false;
 
             if (result.Status == ConsumptionStatus.Ok)
             {
                 clone.Consumption.AddRange(result.Items);
+                clone.Daily.AddRange(result.Daily);
+                clone.DailyIncomplete = result.DailyIncomplete;
                 clone.ConsumptionUpdatedAt = now;
                 clone.ConsumptionError = result.Partial ? result.ErrorCode : null;
                 clone.ConsumptionStale = false;
@@ -499,6 +522,8 @@ namespace AiUsageWidget
 
             // Failed: keep last good totals but mark them stale, never as fresh.
             clone.Consumption.AddRange(snapshot.Consumption);
+            clone.Daily.AddRange(snapshot.Daily);
+            clone.DailyIncomplete = snapshot.DailyIncomplete;
             clone.ConsumptionUpdatedAt = snapshot.ConsumptionUpdatedAt;
             clone.ConsumptionError = result.ErrorCode;
             clone.ConsumptionStale = snapshot.Consumption.Count > 0;
@@ -663,6 +688,13 @@ namespace AiUsageWidget
                 clone.Consumption.Add(CloneConsumption(source.Consumption[i]));
             }
 
+            for (int i = 0; i < source.Daily.Count; i++)
+            {
+                clone.Daily.Add(source.Daily[i].Clone());
+            }
+
+            clone.DailyIncomplete = source.DailyIncomplete;
+
             return clone;
         }
 
@@ -698,6 +730,20 @@ namespace AiUsageWidget
                 if (left.Input != right.Input || left.Output != right.Output) return false;
                 if (left.Reasoning != right.Reasoning) return false;
                 if (left.CacheRead != right.CacheRead || left.CacheWrite != right.CacheWrite) return false;
+            }
+
+            if (a.DailyIncomplete != b.DailyIncomplete) return false;
+            if (a.Daily.Count != b.Daily.Count) return false;
+
+            for (int i = 0; i < a.Daily.Count; i++)
+            {
+                var left = a.Daily[i];
+                var right = b.Daily[i];
+                if (left.Date != right.Date) return false;
+                if (left.CostUsd != right.CostUsd) return false;
+                if (left.TotalTokens != right.TotalTokens) return false;
+                if (left.Billable != right.Billable) return false;
+                if (left.UnpricedTokens != right.UnpricedTokens) return false;
             }
 
             return true;

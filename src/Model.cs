@@ -46,6 +46,58 @@ namespace AiUsageWidget
         }
     }
 
+    /// <summary>
+    /// One local calendar date of usage. Unlike <see cref="Consumption"/> this is
+    /// a single day, so it can be plotted.
+    /// </summary>
+    public sealed class DailyUsage
+    {
+        public string Date;
+        public long Input;
+        public long Output;
+        public long Reasoning;
+        public long CacheRead;
+        public long CacheWrite;
+
+        /// <summary>Non-overlapping total. Negative means the buckets are disjoint.</summary>
+        public long Total = -1;
+
+        /// <summary>
+        /// Prompt tokens that were actually billed as fresh input plus output.
+        /// Cache reads are excluded on purpose: they dominate raw totals and would
+        /// flatten every other series in a chart.
+        /// </summary>
+        public long Billable;
+
+        /// <summary>Cost in USD as reported or estimated. Null when unknown.</summary>
+        public double? CostUsd;
+
+        /// <summary>Tokens whose model had no list price, so cost is understated.</summary>
+        public long UnpricedTokens;
+
+        public long TotalTokens
+        {
+            get { return Total >= 0 ? Total : Input + Output + Reasoning + CacheRead + CacheWrite; }
+        }
+
+        public DailyUsage Clone()
+        {
+            return new DailyUsage
+            {
+                Date = Date,
+                Input = Input,
+                Output = Output,
+                Reasoning = Reasoning,
+                CacheRead = CacheRead,
+                CacheWrite = CacheWrite,
+                Total = Total,
+                Billable = Billable,
+                CostUsd = CostUsd,
+                UnpricedTokens = UnpricedTokens
+            };
+        }
+    }
+
     public sealed class ProviderSnapshot
     {
         public string Id;
@@ -54,6 +106,15 @@ namespace AiUsageWidget
         public ProviderStatus Status = ProviderStatus.Ok;
         public readonly List<UsageWindow> Windows = new List<UsageWindow>();
         public readonly List<Consumption> Consumption = new List<Consumption>();
+
+        /// <summary>
+        /// Local daily series for the chart, oldest first. Empty when the provider
+        /// reports no local history.
+        /// </summary>
+        public readonly List<DailyUsage> Daily = new List<DailyUsage>();
+
+        /// <summary>True when at least one of the last 30 local dates is missing.</summary>
+        public bool DailyIncomplete;
 
         /// <summary>Time of the last successful quota fetch. Never advanced by a failed attempt.</summary>
         public DateTimeOffset FetchedAt;

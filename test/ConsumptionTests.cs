@@ -362,7 +362,9 @@ namespace AiUsageWidget.Tests
                 Assert.Equal(240, TestData.Find(result.Items, "7d").TotalTokens);
                 Assert.Equal(2400, TestData.Find(result.Items, "30d").TotalTokens);
                 Assert.Near(0.25, TestData.Find(result.Items, "today").CostUsd.Value, 0.0001);
-                Assert.Equal(3, runner.Calls.Count);
+
+                // 0, 7, 30 plus one "--days 2" call that closes yesterday exactly.
+                Assert.Equal(4, runner.Calls.Count);
             }
         }
 

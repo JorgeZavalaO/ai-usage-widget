@@ -260,6 +260,7 @@ namespace AiUsageWidget.UI
             header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
             var title = new TextBlock
             {
@@ -275,6 +276,7 @@ namespace AiUsageWidget.UI
             header.Children.Add(title);
 
             var settings = GlyphButton("\uE713", "Settings", OpenSettings);
+            var stats = GlyphButton("\uE9D2", "Usage statistics", OpenStatistics);
             var refresh = GlyphButton("\uE72C", "Refresh", () => _state.RefreshNow());
             _pinButton = GlyphButton(
                 "\uE718", "Always on top", TogglePin, () => _state.Config.AlwaysOnTop);
@@ -291,11 +293,13 @@ namespace AiUsageWidget.UI
             collapse.Glyph = _collapseGlyph;
 
             Grid.SetColumn(settings.Host, 2);
-            Grid.SetColumn(refresh.Host, 3);
-            Grid.SetColumn(_pinButton.Host, 4);
-            Grid.SetColumn(collapse.Host, 5);
-            Grid.SetColumn(close.Host, 6);
+            Grid.SetColumn(stats.Host, 3);
+            Grid.SetColumn(refresh.Host, 4);
+            Grid.SetColumn(_pinButton.Host, 5);
+            Grid.SetColumn(collapse.Host, 6);
+            Grid.SetColumn(close.Host, 7);
             header.Children.Add(settings.Host);
+            header.Children.Add(stats.Host);
             header.Children.Add(refresh.Host);
             header.Children.Add(_pinButton.Host);
             header.Children.Add(collapse.Host);
@@ -802,6 +806,12 @@ namespace AiUsageWidget.UI
         {
             var settings = new SettingsWindow(_state, this);
             settings.ShowDialog();
+        }
+
+        private void OpenStatistics()
+        {
+            var statistics = new StatisticsWindow(_state, this);
+            statistics.ShowDialog();
         }
 
         private void ShowSaveError(string message, string code)

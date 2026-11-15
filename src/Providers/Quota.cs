@@ -21,12 +21,31 @@ namespace AiUsageWidget.Providers
         /// <summary>Overrides the OpenCode CLI path in tests.</summary>
         public string OpenCodeExecutable;
 
-        /// <summary>Overrides OpenCode service detection in tests.</summary>
+        /// <summary>Overrides the OpenCode service detection in tests.</summary>
         public bool? OpenCodeServiceRunning;
+
+        /// <summary>Overrides the per-user state directory in tests.</summary>
+        public string DataDirectory;
+
+        /// <summary>
+        /// Allows work that is too expensive to run on every refresh. The
+        /// statistics window sets this when it needs the 30-day history.
+        /// </summary>
+        public bool AllowSlowBackfill;
 
         public string ResolveHome()
         {
             return string.IsNullOrEmpty(Home) ? ProviderUtil.Home : Home;
+        }
+
+        /// <summary>
+        /// Directory for widget-owned state such as the usage history. Null when
+        /// the caller did not choose one: without an explicit directory the service
+        /// keeps that state in memory instead of touching the real user profile.
+        /// </summary>
+        public string ResolveDataDirectory()
+        {
+            return string.IsNullOrEmpty(DataDirectory) ? null : DataDirectory;
         }
 
         public IHttpTransport ResolveTransport()

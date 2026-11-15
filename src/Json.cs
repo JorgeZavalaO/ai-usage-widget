@@ -171,5 +171,68 @@ namespace AiUsageWidget
         {
             return NewSerializer().Serialize(value);
         }
+
+        /// <summary>
+        /// Returns the balanced JSON object stored under a key, without parsing the
+        /// rest of the document. Used to read single providers from a large
+        /// catalogue that would otherwise exceed the serializer payload limit.
+        /// Returns null when the key is absent or its value is not an object.
+        /// </summary>
+        public static string SubObject(string json, string key, int maxLength = 12 * 1024 * 1024)
+        {
+            if (string.IsNullOrEmpty(json) || string.IsNullOrEmpty(key)) return null;
+
+            var needle = "\"" + key + "\"";
+            var from = 0;
+            while (from < json.Length)
+            {
+                var at = json.IndexOf(needle, from, StringComparison.Ordinal);
+                if (at < 0) return null;
+                from = at + needle.Length;
+
+                var i = from;
+                while (i < json.Length && char.IsWhiteSpace(json[i])) i++;
+                if (i >= json.Length || json[i] != ':') continue;
+                i++;
+                while (i < json.Length && char.IsWhiteSpace(json[i])) i++;
+                if (i >= json.Length || json[i] != '{') continue;
+
+                var end = FindObjectEnd(json, i, maxLength);
+                if (end > 0) return json.Substring(i, end - i);
+            }
+
+            return null;
+        }
+
+        private static int FindObjectEnd(string json, int start, int maxLength)
+        {
+            var depth = 0;
+            var inString = false;
+            var escaped = false;
+
+            for (var i = start; i < json.Length; i++)
+            {
+                if (i - start > maxLength) return -1;
+
+                var c = json[i];
+                if (inString)
+                {
+                    if (escaped) escaped = false;
+                    else if (c == '\\') escaped = true;
+                    else if (c == '"') inString = false;
+                    continue;
+                }
+
+                if (c == '"') inString = true;
+                else if (c == '{') depth++;
+                else if (c == '}')
+                {
+                    depth--;
+                    if (depth == 0) return i + 1;
+                }
+            }
+
+            return -1;
+        }
     }
 }

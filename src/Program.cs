@@ -16,11 +16,13 @@ namespace AiUsageWidget
             var startHidden = Array.IndexOf(args, "--hidden") >= 0;
             var screenshotPath = ParseValue(args, "--screenshot=");
             var settingsScreenshotPath = ParseValue(args, "--screenshot-settings=");
+            var statisticsScreenshotPath = ParseValue(args, "--screenshot-stats=");
             var explicitConfigDirectory = ParseValue(args, "--config-dir=");
 
             // Screenshot runs are isolated development sessions: they must not be
             // blocked by (or signal) a widget instance that is already running.
-            var isolated = screenshotPath != null || settingsScreenshotPath != null;
+            var isolated = screenshotPath != null || settingsScreenshotPath != null ||
+                           statisticsScreenshotPath != null;
 
             var configDirectory = explicitConfigDirectory;
             if (configDirectory == null && isolated)
@@ -107,13 +109,42 @@ namespace AiUsageWidget
 
                     state.Start();
 
-                    if (!startHidden || screenshotPath != null || settingsScreenshotPath != null)
+                    if (!startHidden || screenshotPath != null || settingsScreenshotPath != null ||
+                        statisticsScreenshotPath != null)
                     {
                         window.Show();
                         window.Activate();
                     }
 
-                    if (settingsScreenshotPath != null)
+                    if (statisticsScreenshotPath != null)
+                    {
+                        var statistics = new StatisticsWindow(state, window);
+                        statistics.Show();
+
+                        // The first run may need to rebuild a 30-day history from the
+                        // provider CLI, so this timer is deliberately generous.
+                        var timer = new System.Windows.Threading.DispatcherTimer
+                        {
+                            Interval = TimeSpan.FromSeconds(35)
+                        };
+                        timer.Tick += (s, e) =>
+                        {
+                            timer.Stop();
+                            try
+                            {
+                                statistics.SaveScreenshot(statisticsScreenshotPath);
+                            }
+                            catch (Exception ex)
+                            {
+                                Log.Error("screenshot-stats: " + ex.GetType().Name);
+                            }
+                            statistics.Close();
+                            window.CloseForReal();
+                            app.Shutdown();
+                        };
+                        timer.Start();
+                    }
+                    else if (settingsScreenshotPath != null)
                     {
                         var settings = new SettingsWindow(state, window);
                         settings.Show();

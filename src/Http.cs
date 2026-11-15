@@ -17,6 +17,9 @@ namespace AiUsageWidget
     public interface IHttpTransport
     {
         HttpResult Get(string url, IDictionary<string, string> headers, int timeoutMs, CancellationToken token);
+
+        /// <summary>Same as the four-argument overload with an explicit body cap.</summary>
+        HttpResult Get(string url, IDictionary<string, string> headers, int timeoutMs, CancellationToken token, int maxBytes);
     }
 
     /// <summary>
@@ -34,6 +37,13 @@ namespace AiUsageWidget
     public static class Http
     {
         public const int MaxResponseBytes = 2 * 1024 * 1024;
+
+        /// <summary>
+        /// models.dev publishes every provider in one document of about 6 MB.
+        /// Only that catalogue is allowed to use the larger cap.
+        /// </summary>
+        public const int MaxCatalogBytes = 12 * 1024 * 1024;
+
         private const int MaxRedirects = 2;
 
         static Http()
@@ -61,7 +71,18 @@ namespace AiUsageWidget
             int timeoutMs,
             CancellationToken token)
         {
+            return Get(url, headers, timeoutMs, token, MaxResponseBytes);
+        }
+
+        public static HttpResult Get(
+            string url,
+            IDictionary<string, string> headers,
+            int timeoutMs,
+            CancellationToken token,
+            int maxResponseBytes)
+        {
             if (string.IsNullOrEmpty(url)) throw new QuotaException("invalid_url", "Missing request URL.", 0);
+            if (maxResponseBytes <= 0) maxResponseBytes = MaxResponseBytes;
 
             Uri current;
             if (!Uri.TryCreate(url, UriKind.Absolute, out current))
@@ -72,7 +93,7 @@ namespace AiUsageWidget
             for (int hop = 0; hop <= MaxRedirects; hop++)
             {
                 token.ThrowIfCancellationRequested();
-                var result = GetOnce(current, headers, timeoutMs, token);
+                var result = GetOnce(current, headers, timeoutMs, token, maxResponseBytes);
                 if (!IsRedirect(result.Status)) return result;
 
                 var location = result.RedirectLocation;
@@ -114,7 +135,8 @@ namespace AiUsageWidget
             Uri uri,
             IDictionary<string, string> headers,
             int timeoutMs,
-            CancellationToken token)
+            CancellationToken token,
+            int maxResponseBytes)
         {
             var request = (HttpWebRequest)WebRequest.Create(uri);
             request.Method = "GET";
@@ -156,7 +178,7 @@ namespace AiUsageWidget
                         return new HttpResult
                         {
                             Status = (int)response.StatusCode,
-                            Body = ReadBody(stream),
+                            Body = ReadBody(stream, maxResponseBytes),
                             RedirectLocation = FirstHeader(response, "Location")
                         };
                     }
@@ -178,7 +200,7 @@ namespace AiUsageWidget
                     using (response)
                     using (var stream = response.GetResponseStream())
                     {
-                        var body = stream == null ? string.Empty : ReadBody(stream);
+                        var body = stream == null ? string.Empty : ReadBody(stream, maxResponseBytes);
                         var redirect = FirstHeader(response, "Location");
                         return new HttpResult
                         {
@@ -215,7 +237,7 @@ namespace AiUsageWidget
             catch (Exception) { }
         }
 
-        private static string ReadBody(Stream stream)
+        private static string ReadBody(Stream stream, int maxBytes)
         {
             if (stream == null) return string.Empty;
 
@@ -227,7 +249,7 @@ namespace AiUsageWidget
                 while ((read = stream.Read(chunk, 0, chunk.Length)) > 0)
                 {
                     total += read;
-                    if (total > MaxResponseBytes)
+                    if (total > maxBytes)
                     {
                         throw new QuotaException("response_too_large", "Response exceeded the size limit.", 0);
                     }
@@ -289,6 +311,11 @@ namespace AiUsageWidget
         public HttpResult Get(string url, IDictionary<string, string> headers, int timeoutMs, CancellationToken token)
         {
             return Http.Get(url, headers, timeoutMs, token);
+        }
+
+        public HttpResult Get(string url, IDictionary<string, string> headers, int timeoutMs, CancellationToken token, int maxBytes)
+        {
+            return Http.Get(url, headers, timeoutMs, token, maxBytes);
         }
     }
 }

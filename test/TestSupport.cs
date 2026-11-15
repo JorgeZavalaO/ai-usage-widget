@@ -109,6 +109,11 @@ namespace AiUsageWidget.Tests
 
         public HttpResult Get(string url, IDictionary<string, string> headers, int timeoutMs, CancellationToken token)
         {
+            return Get(url, headers, timeoutMs, token, Http.MaxResponseBytes);
+        }
+
+        public HttpResult Get(string url, IDictionary<string, string> headers, int timeoutMs, CancellationToken token, int maxBytes)
+        {
             lock (_gate)
             {
                 _urls.Add(url);
@@ -244,15 +249,22 @@ namespace AiUsageWidget.Tests
             long input,
             long output,
             long cacheRead = 0,
-            long cacheWrite = 0)
+            long cacheWrite = 0,
+            string model = null)
         {
             return "{\"type\":\"assistant\",\"timestamp\":\"" +
                    timestamp.ToString("o", CultureInfo.InvariantCulture) +
-                   "\",\"message\":{\"id\":\"" + messageId +
-                   "\",\"usage\":{\"input_tokens\":" + input +
+                   "\",\"message\":{\"id\":\"" + messageId + "\"" +
+                   (model == null ? string.Empty : ",\"model\":\"" + model + "\"") +
+                   ",\"usage\":{\"input_tokens\":" + input +
                    ",\"output_tokens\":" + output +
                    ",\"cache_read_input_tokens\":" + cacheRead +
                    ",\"cache_creation_input_tokens\":" + cacheWrite + "}}}";
+        }
+
+        public static string CodexTurnContext(string model)
+        {
+            return "{\"type\":\"turn_context\",\"payload\":{\"turn_id\":\"t\",\"model\":\"" + model + "\"}}";
         }
 
         public static string CodexLine(
